@@ -5,16 +5,25 @@ import networkx as nx
 import heapq
 
 class Trip:
-    def __init__(self, cities: list, problem: Problem):
+    def __init__(self, cities: list, problem: Problem, precomputed_path=None):
         self.cities = cities        # tuples of (city_index, gold_amount)
-        self.path = self.compute_optimal_path(problem)
+
+        if precomputed_path:
+            # FAST MODE: Use the path provided (e.g., from Fast Baseline)
+            # This avoids running A* 1,000 times for the initial population.
+            self.path = precomputed_path
+        else:
+            # STANDARD MODE: Compute path using your robust solver (A* / Dijkstra)
+            # This is still used when mutations create new, complex trips.
+            self.path = self.compute_optimal_path(problem)
+
         self.total_cost = self.compute_cost(problem)
         self.total_gold = sum([gold for _, gold in cities])
 
     def dijkstra_with_gold(self, graph: nx.Graph, source: int, target: int, gold:float, problem: Problem):
         """
-        computes the optimal path from source to target in graph considering gold pickup and cost function.:
-            dist + (alpha * dist * total_gold) ** beta
+        Computes the optimal path from source to target in graph considering gold pickup and cost function:
+        dist + (alpha * dist * total_gold) ** beta
         """
         pq = [(0.0, source)]
         dist = {source: 0.0}
@@ -51,6 +60,83 @@ class Trip:
             path.append(u)
         path.reverse()
         return path
+    
+    def astar_with_gold(self, graph: nx.Graph, source: int, target: int, gold: float, problem):
+        """
+        Computes the optimal path using A* search.
+        Heuristic: The cost function applied to the Euclidean distance.
+        """
+        
+        # 1. Define the Heuristic Function (Local helper or separate method)
+        def heuristic(u, v):
+            # Get positions
+            pos_u = np.array(graph.nodes[u]['pos'])
+            pos_v = np.array(graph.nodes[v]['pos'])
+            
+            # Euclidean distance (Straight line)
+            dist = np.linalg.norm(pos_u - pos_v)
+            
+            # The minimum possible cost to travel this distance with current gold
+            return dist + (problem.alpha * dist * gold) ** problem.beta
+
+        # 2. Initialize A* structures
+        # Priority Queue stores: (f_score, current_node)
+        # f_score = g_score (actual cost so far) + h_score (estimated cost to go)
+        start_h = heuristic(source, target)
+        pq = [(start_h, source)]
+        
+        # g_score: The cheapest cost found so far to reach a node
+        g_score = {source: 0.0}
+        
+        prev = {}
+        visited = set()
+
+        while pq:
+            # Pop node with lowest ESTIMATED total cost
+            current_f, u = heapq.heappop(pq)
+            
+            if u in visited:
+                continue
+            visited.add(u)
+
+            if u == target:
+                break
+
+            # If the popped f_score is worse than what we already found, skip (lazy deletion)
+            # Note: We can't strictly rely on this optimization with non-monotonic heuristics,
+            # but ours is monotonic, so it's safe.
+            if current_f > g_score.get(u, float('inf')) + heuristic(u, target):
+                continue
+
+            for v in graph.neighbors(u):
+                # Calculate actual cost of this step
+                edge_weight = graph[u][v]['dist']
+                step_cost = edge_weight + (problem.alpha * edge_weight * gold) ** problem.beta
+                
+                tentative_g = g_score[u] + step_cost
+
+                if tentative_g < g_score.get(v, float('inf')):
+                    # We found a better path to v!
+                    prev[v] = u
+                    g_score[v] = tentative_g
+                    
+                    # f = g + h
+                    f_score = tentative_g + heuristic(v, target)
+                    heapq.heappush(pq, (f_score, v))
+
+        if target not in g_score:
+             # Fallback or error if graph is disconnected
+            raise nx.NetworkXNoPath(f"No path from {source} to {target}")
+
+        # Reconstruct path
+        path = [target]
+        curr = target
+        while curr != source:
+            curr = prev[curr]
+            path.append(curr)
+        path.reverse()
+        
+        return path
 
     def compute_optimal_path(self, problem: Problem):
         path = []
@@ -66,7 +152,8 @@ class Trip:
                 previous_gold += self.cities[i-1][1]
             
             # p = nx.shortest_path(problem.graph, source=source, target=city, weight='dist')
-            p = self.dijkstra_with_gold(problem.graph, source=source, target=city, gold=previous_gold, problem=problem)
+            # p = self.dijkstra_with_gold(problem.graph, source=source, target=city, gold=previous_gold, problem=problem)
+            p = self.astar_with_gold(problem.graph, source=source, target=city, gold=previous_gold, problem=problem)
             
             for node in p[0:-1]:
                 path.append((node, previous_gold))

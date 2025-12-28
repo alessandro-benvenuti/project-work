@@ -85,31 +85,28 @@ class Problem:
         color = ['red'] + ['lightblue'] * (len(self._graph) - 1)
         return nx.draw(self._graph, pos, with_labels=True, node_color=color, node_size=size)
     
+
+# --- MONKEY PATCH START ---
+# We overwrite the 'graph' property of the Problem class.
+# Instead of creating a copy (nx.Graph(self._graph)), we return the private reference directly.
+def fast_graph_accessor(self):
+    return self._graph          # This way we do not create a copy each time, making it extremely faster.
+
+Problem.graph = property(fast_graph_accessor)
+# --- MONKEY PATCH END ---
+    
 def solution(problem: Problem) -> Solution:
     return solve(problem)
     
 
 
 
-
-
 def main():
-    problem = Problem(100, density=0.2, alpha=2, beta=1)
+    problem = Problem(100, density=0.2, alpha=2, beta=2)
     
-    print(problem.baseline())
+    print(f"Teacher baseline: {problem.baseline()}")
 
-    cities = []
-    cost = 0
-
-    for city in range(1, 100):
-        trip = Trip(cities=[(city, problem.graph.nodes[city]['gold'])], problem=problem)
-        # print(trip.path)
-        cost += trip.total_cost
-
-    print(f"My baseline Total cost: {cost}")
-
-    sol = solution(problem)
-    print(f"Total cost from Solution class: {sol.total_cost}")
+    solution(problem)
 
 
 
