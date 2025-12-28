@@ -102,12 +102,17 @@ def solution(problem: Problem) -> Solution:
 
 
 def main():
-    problem = Problem(100, density=0.2, alpha=2, beta=2)
+    problem = Problem(100, density=0.2, alpha=0.002, beta=100)
+
+    baseline = problem.baseline()
+    print(f"Teacher baseline: {baseline}")
     
-    print(f"Teacher baseline: {problem.baseline()}")
 
-    solution(problem)
+    sol = solution(problem)
+    print(f"Solution total cost: {sol.total_cost}")
 
+    improvement = (baseline - sol.total_cost) / baseline * 100
+    print(f"Improvement over baseline: {improvement:.2f}%")
 
 
     # print(Problem(100, density=0.2, alpha=1, beta=2).baseline())

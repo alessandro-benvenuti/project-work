@@ -5,20 +5,26 @@ import networkx as nx
 import heapq
 
 class Trip:
-    def __init__(self, cities: list, problem: Problem, precomputed_path=None):
-        self.cities = cities        # tuples of (city_index, gold_amount)
+    def __init__(self, cities: list, problem, precomputed_path=None, static_paths=None):
+        """
+        :param cities: List of (city_index, gold_amount)
+        :param precomputed_path: Full path list (for baseline generation)
+        :param static_paths: Dict {'outbound': [nodes], 'inbound': [nodes]} 
+                             containing precomputed shortest paths for legs.
+        """
+        self.cities = cities
 
         if precomputed_path:
-            # FAST MODE: Use the path provided (e.g., from Fast Baseline)
-            # This avoids running A* 1,000 times for the initial population.
+            # FASTEST: Use the full provided path (e.g. for Initial Baseline)
             self.path = precomputed_path
         else:
-            # STANDARD MODE: Compute path using your robust solver (A* / Dijkstra)
-            # This is still used when mutations create new, complex trips.
-            self.path = self.compute_optimal_path(problem)
+            # HYBRID: Compute path, potentially reusing static segments
+            self.path = self.compute_optimal_path(problem, static_paths)
 
         self.total_cost = self.compute_cost(problem)
         self.total_gold = sum([gold for _, gold in cities])
+
+    
 
     def dijkstra_with_gold(self, graph: nx.Graph, source: int, target: int, gold:float, problem: Problem):
         """
@@ -138,29 +144,50 @@ class Trip:
         
         return path
 
-    def compute_optimal_path(self, problem: Problem):
+    def compute_optimal_path(self, problem, static_paths=None):
         path = []
+        
+        # 1. OUTBOUND LEG (Base -> First City)
+        # The truck is empty (gold=0), so Shortest Distance is ALWAYS optimal.
+        # We use the precomputed path regardless of Beta.
+        if static_paths and 'outbound' in static_paths:
+            # Append everything except the destination (handled in loop)
+            for node in static_paths['outbound'][:-1]:
+                path.append((node, 0.0))
+        else:
+            # Fallback if no static path provided
+            first_city = self.cities[0][0]
+            p = self.astar_with_gold(problem.graph, 0, first_city, 0.0, problem)
+            for node in p[0:-1]:
+                path.append((node, 0.0))
+
+        # 2. INTERMEDIATE LEGS (City -> City)
+        # Must always be computed dynamically because weight varies.
+        previous_gold = 0
         for i, x in enumerate(self.cities):
             city = x[0]
-
-            assert city in problem.graph.nodes, f"City {city} not in graph"
-            if i == 0:
-                source = 0
-                previous_gold = 0
-            else:
+            current_gold = x[1]
+            
+            if i > 0:
                 source = self.cities[i-1][0]
-                previous_gold += self.cities[i-1][1]
+                p = self.astar_with_gold(problem.graph, source, city, previous_gold, problem)
+                for node in p[0:-1]:
+                    path.append((node, previous_gold))
             
-            # p = nx.shortest_path(problem.graph, source=source, target=city, weight='dist')
-            # p = self.dijkstra_with_gold(problem.graph, source=source, target=city, gold=previous_gold, problem=problem)
-            p = self.astar_with_gold(problem.graph, source=source, target=city, gold=previous_gold, problem=problem)
-            
-            for node in p[0:-1]:
-                path.append((node, previous_gold))
+            previous_gold += current_gold
 
-        previous_gold += self.cities[-1][1]
-        p = self.dijkstra_with_gold(problem.graph, source=self.cities[-1][0], target=0, gold=previous_gold, problem=problem)
-        for node in p:
+        # 3. INBOUND LEG (Last City -> Base)
+        # Here we apply your logic:
+        # If Beta <= 1: Precomputed (Distance) is optimal. Use it.
+        # If Beta > 1: Precomputed is risky. Use A* to optimize cost.
+        if static_paths and 'inbound' in static_paths and problem.beta <= 1:
+            for node in static_paths['inbound']:
+                path.append((node, previous_gold))
+        else:
+            # Run A* / Dijkstra because Beta is high (or no static path available)
+            source = self.cities[-1][0]
+            p = self.dijkstra_with_gold(problem.graph, source, 0, previous_gold, problem)
+            for node in p:
                 path.append((node, previous_gold))
 
         return path
