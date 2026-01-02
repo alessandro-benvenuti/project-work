@@ -12,7 +12,7 @@ from gold_collector.utils import generate_baseline, generate_topology_savings, g
 class AdaptiveSelector:
     def __init__(self, alpha):
         # 1. Biased Initialization based on your Alpha discovery
-        if alpha <= 0.001:
+        if alpha <= 0.002:
             self.weights = {"split": 10.0, "merge": 50.0, "swap": 20.0}
         else:
             self.weights = {"split": 10.0, "merge": 10.0, "switch": 10.0}
@@ -210,6 +210,8 @@ def solve(problem: Problem) -> Solution:
             # Use adaptive splitting strategy to minimize cost with high Beta
             # This involves dynamically computing paths with A* for each trip
             sol = generate_adaptive_split(problem)
+
+    print(f"Initial solution cost: {sol.total_cost}")
 
     sol = simulated_annealing(sol, problem, initial_temp=5000.0, cooling_rate=0.995, max_iterations=5000)
     

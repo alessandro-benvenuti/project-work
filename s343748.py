@@ -102,7 +102,7 @@ def solution(problem: Problem) -> Solution:
 
 
 def main():
-    problem = Problem(100, density=1, alpha=1, beta=1)
+    problem = Problem(100, density=0.2, alpha=0.001, beta=1)
 
     baseline = problem.baseline()
     print(f"Teacher baseline: {baseline}")
