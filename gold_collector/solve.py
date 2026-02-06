@@ -248,7 +248,32 @@ class Archipelago:
             self.islands.append(island)
 
     def perform_migration(self):
-        pass  # TODO Implement migration logic here
+        """
+        Executes Ring Migration: 
+        Island 0 -> Island 1 -> Island 2 -> ... -> Island 0
+        The Best individual of Island i replaces the Worst of Island i+1.
+        """
+        # 1. Harvest the Elites
+        # We must Deep Copy so mutations in the new island don't affect the old one
+        # migrants[i] is the best solution from island i
+        migrants = [deepcopy(island.population[0]) for island in self.islands]
+
+        # 2. Inject into Neighbors
+        for i in range(len(self.islands)):
+            # Determine neighbor index (Ring Topology)
+            target_idx = (i + 1) % len(self.islands)
+            target_island = self.islands[target_idx]
+
+            # Replace the worst individual (last in sorted list) with the incoming elite
+            # Note: We assume population is sorted by cost (Ascending: Best -> Worst)
+            target_island.population[-1] = migrants[i]
+
+            # Re-sort the target island immediately to maintain invariant
+            target_island.population.sort(key=lambda x: x.cost)
+
+        # Optional: Log the migration event
+        best_costs = [isl.population[0].cost for isl in self.islands]
+        print(f"--- Migration Complete. Island Bests: {['{:.2f}'.format(c) for c in best_costs]} ---")
 
     def run_parallel(self, total_generations=200, migration_interval=20):
         # We run in blocks (epochs)
@@ -273,7 +298,10 @@ class Archipelago:
                 best = min(isl.population[0].cost for isl in self.islands)
                 print(f"Epoch Best: {best:.2f}")
 
-        # Rehydrate final best solution...
+        best_ones = [isl.population[0] for isl in self.islands]
+        best_solution = min(best_ones, key=lambda ind: ind.cost)
+        return best_solution.to_solution()
+        
 
 
 def solve(problem: Problem) -> Solution:
@@ -317,7 +345,7 @@ def solve(problem: Problem) -> Solution:
     #         sol = simulated_annealing(sol, problem, distance_matrix, initial_temp=5000.0, cooling_rate=0.995, max_iterations=100000)
 
     archipelago = Archipelago(problem)
-    archipelago.run_parallel(total_generations=10, migration_interval=5)
+    solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
     
     
-    return "ciao"
+    return solution
