@@ -14,6 +14,29 @@ def get_euclidean_distance(node_a, node_b, graph):
     pos_b = np.array(graph.nodes[node_b]['pos'])
     return np.linalg.norm(pos_a - pos_b)
 
+def compute_distance_matrix(problem):
+    """
+    Creates a 2D array where matrix[i][j] is the TRUE graph distance
+    between city i and city j.
+    """
+    # Get all shortest path lengths using Dijkstra (handles weighted edges correctly)
+    # This returns an iterator, so we convert to dict
+    length_iter = nx.all_pairs_dijkstra_path_length(problem.graph, weight='dist')
+    dist_dict = dict(length_iter)
+    
+    num_nodes = problem.num_cities
+    matrix = np.zeros((num_nodes, num_nodes))
+    
+    for u in range(num_nodes):
+        for v in range(num_nodes):
+            # If path exists, store it. If isolated (unlikely in connected), use infinity.
+            if v in dist_dict[u]:
+                matrix[u][v] = dist_dict[u][v]
+            else:
+                matrix[u][v] = float('inf')
+                
+    return matrix
+
 def generate_baseline(problem):
     """
     Smart Baseline Generator.

@@ -1,4 +1,4 @@
- Project Description: Gold Collection Optimization Problem
+Project Description: Gold Collection Optimization Problem
 
 ## Problem Statement
 
