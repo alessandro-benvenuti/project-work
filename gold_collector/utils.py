@@ -5,6 +5,41 @@ from copy import copy, deepcopy
 
 from gold_collector.core import Solution, Trip
 
+def precompute_weighted_paths(problem, ref_gold_ratio=0.5):
+    """
+    Generates a dictionary of optimal paths between all pairs of nodes.
+    The optimization assumes the truck carries 'ref_gold_ratio' * AvgGold.
+    
+    This creates 'Fixed Geometry' that respects the Beta > 1 penalty 
+    (preferring short hops) without running A* every time.
+    """
+    # 1. Calculate Reference Gold (The "Average" Load)
+    total_gold_in_world = sum(node[1]['gold'] for node in problem.graph.nodes(data=True))
+    # Average gold per city? Or average load? 
+    # A safe heuristic is: The truck is usually half full relative to average city gold
+    avg_city_gold = total_gold_in_world / problem.num_cities
+    
+    # Heuristic: We design paths assuming we carry this much gold
+    ref_gold = avg_city_gold * ref_gold_ratio
+    
+    # 2. Create a temporary graph with STATIC weights
+    # We bake the cost formula into the edge weight
+    G_weighted = problem.graph.copy()
+    
+    for u, v, data in G_weighted.edges(data=True):
+        d = data['dist']
+        # The Cost Formula: dist + (alpha * dist * ref_gold)^beta
+        weight = d + (problem.alpha * d * ref_gold) ** problem.beta
+        data['weight'] = weight
+
+    # 3. Run All-Pairs Dijkstra ONCE
+    # This returns a generator, convert to dict
+    # format: paths[source][target] = [list of nodes]
+    # Memory: ~200MB for 1000 cities. fast and safe.
+    paths = dict(nx.all_pairs_dijkstra_path(G_weighted, weight='weight'))
+    
+    return paths
+
 def get_euclidean_distance(node_a, node_b, graph):
     """
     Fastest possible distance check.
@@ -37,51 +72,37 @@ def compute_distance_matrix(problem):
                 
     return matrix
 
-def generate_baseline(problem):
+def generate_baseline(problem, path_matrix=None, use_precompute=False):
     """
     Smart Baseline Generator.
-    1. Runs Dijkstra ONCE to get all outbound paths (Distance Optimal).
-    2. Feeds these paths to Trip as 'static_paths'.
-    3. The Trip class automatically decides:
-       - Use outbound path? YES (Always optimal for empty truck).
-       - Use inbound path? Only if Beta <= 1. Otherwise, run A*.
+    Creates one trip per city.
+    Uses path_matrix if available for O(1) path retrieval.
+    Otherwise falls back to A* (via the Trip class).
     """
-    
-    # Use _graph to ensure O(1) access speed (avoid copying)
-    G = problem._graph 
-    
-    # 1. Run Dijkstra ONCE from base (0)
-    # This gives us the optimal distance path to EVERY city.
-    all_outbound_paths = nx.single_source_dijkstra_path(G, 0, weight='dist')
-    
     trips = []
-    
+
+    # Iterate 1 to N (skipping base 0)
     for city in range(1, problem.num_cities):
-        if city not in all_outbound_paths:
-            continue 
+        
+        # Optimization: Don't visit cities with no gold
+        gold_amount = problem.graph.nodes[city]['gold']
+        if gold_amount <= 0:
+            continue
             
-        outbound_nodes = all_outbound_paths[city]
-        
-        # Prepare the segments
-        # Outbound: 0 -> ... -> City
-        # Inbound Heuristic: City -> ... -> 0 (Reverse of outbound)
-        static_segments = {
-            'outbound': outbound_nodes,
-            'inbound': outbound_nodes[::-1]
-        }
-        
-        # Create Trip
-        # We DO NOT use 'precomputed_path' anymore.
-        # We use 'static_paths' to let Trip apply its Hybrid Logic.
-        trips.append(Trip(
-            cities=[(city, G.nodes[city]['gold'])], 
+        # Create a dedicated trip for this city
+        # The Trip class handles the routing logic (Approx vs Exact) internally
+        new_trip = Trip(
+            cities=[(city, gold_amount)], 
             problem=problem, 
-            static_paths=static_segments
-        ))
+            path_matrix=path_matrix, 
+            use_precompute=use_precompute
+        )
         
+        trips.append(new_trip)
+    
     return Solution(trips)
 
-def generate_topology_savings(problem, check_neighbors=False, sample_ratio=1):
+def generate_topology_savings(problem, check_neighbors=False, sample_ratio=1, path_matrix=None, use_precompute=False):
     """
     Heuristic 3: 'Path Interception' (Optimized)
     
@@ -92,7 +113,7 @@ def generate_topology_savings(problem, check_neighbors=False, sample_ratio=1):
     """
     
     # 1. Initialize fast baseline
-    base = generate_baseline(problem)
+    base = generate_baseline(problem, path_matrix=path_matrix, use_precompute=use_precompute)
     trips = base.trips.copy()
     
     # Use the graph for neighbor lookups
@@ -162,7 +183,7 @@ def generate_topology_savings(problem, check_neighbors=False, sample_ratio=1):
                         # --- Evaluation ---
                         # We found a candidate! Calculate cost.
                         combined_cities = trip_a.cities + trip_b.cities
-                        new_trip = Trip(combined_cities, problem)
+                        new_trip = Trip(combined_cities, problem, path_matrix=path_matrix, use_precompute=use_precompute)
                         
                         gain = (trip_a.total_cost + trip_b.total_cost) - new_trip.total_cost
                         
@@ -246,7 +267,7 @@ def generate_random_chunk_visits(problem, max_split=4):
             
     return Solution(trips)
 
-def generate_adaptive_split(problem, max_search=6):
+def generate_adaptive_split(problem, max_search=10, path_matrix=None, use_precompute=False):
     """
     Heuristic 6: Adaptive Optimal Split
     
@@ -262,7 +283,7 @@ def generate_adaptive_split(problem, max_search=6):
     
     # If Beta is small, don't waste time; 1 trip is always best.
     if problem.beta <= 1:
-        return generate_baseline(problem)
+        return generate_baseline(problem, path_matrix=path_matrix, use_precompute=use_precompute)
 
     best_trips = []
     
@@ -284,7 +305,9 @@ def generate_adaptive_split(problem, max_search=6):
             # We use precomputed nodes for speed
             temp_trip = Trip(
                 cities=[(city, gold_per_visit)], 
-                problem=problem
+                problem=problem,
+                path_matrix=path_matrix,
+                use_precompute=use_precompute
             )
             
             # Total cost for this strategy = Cost of ONE trip * k

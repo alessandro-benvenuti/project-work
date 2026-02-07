@@ -10,7 +10,7 @@ import random
 import os
 
 from gold_collector.core import Solution, Trip
-from gold_collector.utils import generate_baseline, generate_topology_savings, generate_split_visits, generate_random_chunk_visits, generate_adaptive_split, compute_distance_matrix
+from gold_collector.utils import generate_baseline, generate_topology_savings, generate_split_visits, generate_random_chunk_visits, generate_adaptive_split, compute_distance_matrix, precompute_weighted_paths
 from gold_collector.genetic import Island, run_island_evolution
 
 class Archipelago:
@@ -19,22 +19,34 @@ class Archipelago:
         self.islands = []
         self.distance_matrix = compute_distance_matrix(problem)
 
+        # Determine if we should use the heuristic precomputation based on problem size and beta:
+        # practical threshold can be tuned based on experiments. Here we choose num_cities > 200 as a heuristic cutoff for when to use the approximation.
+        # Also if beta <= 1 then the cost is more distance-sensitive, so we can afford to precompute paths in any case to speeed up the search.
+        self.use_precompute = (problem.beta <= 1.0) or (problem.num_cities > 200)
+        
+        if self.use_precompute:
+            print("--- Precomputing Paths (Heuristic Mode) ---")
+            self.path_matrix = precompute_weighted_paths(problem, ref_gold_ratio=0.5)
+        else:
+            self.path_matrix = None
+
         # Initialize islands with different strategies or seed solutions
         for i in range(num_islands):
             # Each island gets a different seed solution
             if i==0:
-                seed_solution = generate_baseline(problem)
+                seed_solution = generate_baseline(problem, path_matrix=self.path_matrix, use_precompute=self.use_precompute)
             elif i==1:
-                seed_solution = generate_topology_savings(problem)
+                seed_solution = generate_topology_savings(problem, path_matrix=self.path_matrix, use_precompute=self.use_precompute)
             else:
-                seed_solution = generate_adaptive_split(problem)
+                seed_solution = generate_adaptive_split(problem, path_matrix=self.path_matrix, use_precompute=self.use_precompute)
 
             island = Island(
                 island_id=i,
                 strategy="random",
                 seed_solution=seed_solution,
                 problem=problem,
-                dist_matrix=self.distance_matrix,
+                path_matrix=self.path_matrix,
+                use_precompute=self.use_precompute,
                 population_size=population_size
             )
             self.islands.append(island)
@@ -66,6 +78,37 @@ class Archipelago:
         # Optional: Log the migration event
         best_costs = [isl.population[0].cost for isl in self.islands]
         print(f"--- Migration Complete. Island Bests: {['{:.2f}'.format(c) for c in best_costs]} ---")
+
+    def solution_to_cities(self, solution: Solution):
+        """
+        Converts a Solution object (with Trips and Paths) into the required output format:
+        List of (node_id, gold_picked_up_here) in the order they are visited.
+        """
+        # Extract the full path from the solution
+        cities = []
+        for trip in solution.trips:
+            # Convert tuples to lists immediately so they are mutable
+            # trip.path is [(node, gold), ...]
+            path_as_lists = [list(step) for step in trip.path]
+            cities.extend(path_as_lists)
+
+        previous = 0.0
+        for city in cities:
+            node_id = city[0]
+            if node_id != 0:
+                current_cumulative = city[1]
+                city[1] = current_cumulative - previous
+                
+                # Sanity fix for float noise (e.g., -1e-16 becomes 0.0)
+                if abs(city[1]) < 1e-9: 
+                    city[1] = 0.0
+                
+                previous = current_cumulative
+            else:
+                # At base, we reset our 'previous' tracker because the truck is empty
+                previous = 0.0
+                # The delta at base is always 0 (we don't 'collect' at base)
+                city[1] = 0.0
 
     def run_parallel(self, total_generations=200, migration_interval=20):
         # --- LOGGING SETUP ---
@@ -106,20 +149,93 @@ class Archipelago:
 
         best_ones = [isl.population[0] for isl in self.islands]
         best_solution = min(best_ones, key=lambda ind: ind.cost)
-        cost = best_solution.to_solution().total_cost
+        final_solution = best_solution.to_solution(self.problem)
 
-        cities = []
-        for trip in best_solution.trips:
-            cities.extend(trip.path)
+        # Extract the full path from the solution
+        cities = self.solution_to_cities(final_solution)
 
-        return cities, cost
+        # Now we check if this final list is actually valid
+        is_valid, message = verify_delta_solution(cities, self.problem, tolerance=1e-3)
+
+        if not is_valid:
+            print(f"FINAL CHECK FAILED: {message}")
+            # Option: Return empty or raise error
+        else:
+            print(f"FINAL CHECK PASSED")
+
+        return cities, final_solution.total_cost
         
+
+
+def verify_delta_solution(cities_list, problem, tolerance=1e-3):
+    """
+    Verifies the solution AFTER it has been converted to 'delta' format.
+    
+    Format: [(node_id, gold_picked_up_here), ...]
+    
+    Checks:
+    1. Connectivity: Do edges exist between sequential nodes?
+    2. Gold Completeness: Does sum(gold_picked_up) for each city match the graph?
+    3. Physics: Are we picking up negative gold? (Impossible)
+    """
+    
+    # 1. Connectivity Check
+    if not cities_list or cities_list[0][0] != 0:
+        return False, "Path must start at base (0)."
+
+    collected_gold = {c: 0.0 for c in range(problem.num_cities)}
+
+    for i in range(len(cities_list)):
+        current_node = cities_list[i][0]
+        current_delta = cities_list[i][1]
+
+        # A. Check Edge Existence (skip for first node)
+        if i > 0:
+            prev_node = cities_list[i-1][0]
+            if prev_node != current_node:
+                # Note: We use the private graph accessor or public property
+                if not problem.graph.has_edge(prev_node, current_node):
+                    return False, f"Step {i}: No edge between {prev_node} and {current_node}"
+
+        # B. Check for Negative Gold (Bug in delta calculation)
+        if current_delta < -1e-9:
+             return False, f"Step {i} (City {current_node}): Negative gold collected ({current_delta})."
+
+        # C. Accumulate Gold
+        if current_node != 0:
+            collected_gold[current_node] += current_delta
+
+    # 2. Completeness Check (with tolerance)
+    missing_log = []
+    for c in range(1, problem.num_cities):
+        total_available = problem.graph.nodes[c]['gold']
+        total_collected = collected_gold[c]
+        
+        # Check if we missed gold (Undershoot)
+        if total_available - total_collected > tolerance:
+            missing_log.append(f"City {c}: Collected {total_collected:.2f} / {total_available:.2f}")
+        
+        # Check if we invented gold (Overshoot - usually a bug in accumulation)
+        elif total_collected - total_available > tolerance:
+             missing_log.append(f"City {c}: OVER-COLLECTED {total_collected:.2f} / {total_available:.2f}")
+
+    if missing_log:
+        return False, "Gold Validation Failed:\n" + "\n".join(missing_log)
+
+    return True, "Valid"
+
+
 
 
 def solve(problem: Problem) -> Solution:
 
     archipelago = Archipelago(problem)
-    solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
+
+    if problem.beta <1.2 or problem.alpha < 2*10e-3:
+        solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
+    else:
+        final_solution = generate_adaptive_split(problem, max_search=1000)
+        solution = (archipelago.solution_to_cities(final_solution), final_solution.total_cost)
     
     
     return solution
