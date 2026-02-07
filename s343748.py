@@ -102,20 +102,25 @@ def solution(problem: Problem) -> Solution:
 
 
 def main():
-    problem = Problem(100, density=0.2, alpha=1, beta=2)
+    problem = Problem(1000, density=0.2, alpha=1, beta=1)
 
     baseline = problem.baseline()
     print(f"Teacher baseline: {baseline}")
     
 
-    sol = solution(problem)
-    print(f"Solution total cost: {sol.total_cost}")
+    sol, cost = solution(problem)
+    print(f"Solution total cost: {cost}")
 
-    improvement = (baseline - sol.total_cost) / baseline * 100
+    improvement = (baseline - cost) / baseline * 100
     print(f"Improvement over baseline: {improvement:.2f}%")
 
-    times_better = baseline / sol.total_cost
+    times_better = baseline / cost
     print(f"Times better than baseline: {times_better:.2e}")
+
+    # print(f"--- SOLUTION PATH ---\n{sol}")
+
+    with open("logs/result.txt", "w") as f:
+        f.write(str(sol))
 
 
     # print(Problem(100, density=0.2, alpha=1, beta=2).baseline())
