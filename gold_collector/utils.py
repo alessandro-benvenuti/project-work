@@ -269,60 +269,98 @@ def generate_random_chunk_visits(problem, max_split=4):
 
 def generate_adaptive_split(problem, max_search=10, path_matrix=None, use_precompute=False):
     """
-    Heuristic 6: Adaptive Optimal Split
+    Heuristic 6: Adaptive Optimal Split (Binary Search Optimized)
     
-    Strategy:
-    For each city, numerically test k=1, k=2, ... k=max_search visits.
-    Pick the 'k' that results in the lowest total cost for that specific city.
-    
-    Why:
-    - Some far cities with little gold are best visited ONCE (k=1).
-    - Nearby cities with massive gold might need THREE visits (k=3).
-    - Removes the guesswork of 'Split Visits' and 'Random'.
+    Uses Binary Search to find the optimal 'k' visits minimizing total cost.
+    Complexity: O(log max_search) instead of O(max_search).
     """
     
-    # If Beta is small, don't waste time; 1 trip is always best.
+    # Se Beta è basso, conviene sempre fare 1 solo viaggio.
     if problem.beta <= 1:
         return generate_baseline(problem, path_matrix=path_matrix, use_precompute=use_precompute)
 
     best_trips = []
     
-    
     for city in range(1, problem.num_cities):
         total_gold = problem.graph.nodes[city]['gold']
         if total_gold == 0: continue
         
-        
-        # --- The Competition ---
-        best_k_cost = float('inf')
-        best_k_trips = []
-        
-        # Test k=1 to k=max_search
-        for k in range(1, max_search + 1):
+        # --- Helper: calcola costo per K viaggi ---
+        # Usiamo una cache locale per non ricalcolare lo stesso k due volte (opzionale ma utile)
+        def get_total_strategy_cost(k):
             gold_per_visit = total_gold / k
             
-            # Create a TEMPORARY trip just to check its cost
-            # We use precomputed nodes for speed
+            # Creiamo UN solo trip rappresentativo
             temp_trip = Trip(
                 cities=[(city, gold_per_visit)], 
                 problem=problem,
                 path_matrix=path_matrix,
                 use_precompute=use_precompute
             )
-            
-            # Total cost for this strategy = Cost of ONE trip * k
-            current_strategy_cost = temp_trip.total_cost * k
-            
-            if current_strategy_cost < best_k_cost:
-                best_k_cost = current_strategy_cost
-                # Store the winner. We need 'k' copies of this trip.
-                # We store the object itself to clone later
-                best_k_trips = [temp_trip] + [deepcopy(temp_trip) for _ in range(k-1)]
-            else:
-                # Since cost is unlikely to improve with higher k, we can break early
-                break
+            # Costo totale = costo di un viaggio * k
+            return temp_trip.total_cost * k, temp_trip
+
+        # --- RICERCA BINARIA DEL MINIMO ---
+        low = 1
+        high = max_search
         
-        # Append the winning strategy for this city to the main list
-        best_trips.extend(best_k_trips)
+        # Salviamo il trip migliore trovato durante la ricerca per non doverlo ricreare alla fine
+        best_k = 1
+        best_trip_obj = None
+        min_cost = float('inf')
+
+        while low < high:
+            mid = (low + high) // 2
+            
+            # Calcoliamo costo a 'mid' e 'mid+1' per capire la pendenza
+            cost_mid, trip_mid = get_total_strategy_cost(mid)
+            cost_next, _       = get_total_strategy_cost(mid + 1)
+            
+            # Aggiorniamo il best assoluto se lo incontriamo
+            if cost_mid < min_cost:
+                min_cost = cost_mid
+                best_k = mid
+                best_trip_obj = trip_mid
+            
+            if cost_next < min_cost: # Controllo difensivo anche su next
+                 min_cost = cost_next
+                 best_k = mid + 1
+                 # Non salviamo l'oggetto next per efficienza, lo ricreiamo solo se vince alla fine
+                 # (o potremmo salvarlo, ma complica il loop)
+
+            # Logica Binary Search per funzioni convesse
+            if cost_mid < cost_next:
+                # La curva sale verso destra, il minimo è a sinistra (o è mid)
+                high = mid
+            else:
+                # La curva scende verso destra, il minimo è più avanti
+                low = mid + 1
+        
+        # Alla fine del loop, 'low' è l'ottimo (o molto vicino)
+        final_k = low
+        final_cost, final_trip = get_total_strategy_cost(final_k)
+        
+        # Controllo finale: meglio quello trovato dal loop o quello "best" tracciato?
+        # (Generalmente coincidono, ma per sicurezza prendiamo il migliore)
+        if final_cost < min_cost:
+            winner_trip = final_trip
+            winner_k = final_k
+        else:
+            # Se avevamo trovato un punto migliore prima (raro ma possibile nei bordi)
+            # Se best_trip_obj è None (es. loop mai entrato), usiamo final
+            if best_trip_obj is None:
+                winner_trip = final_trip
+                winner_k = final_k
+            else:
+                winner_trip = best_trip_obj
+                winner_k = best_k
+
+        # --- Creazione Lista Finale ---
+        # Qui usiamo la logica classica (lista di oggetti)
+        # Se usi la logica "repeats" (consigliata), basta: winner_trip.repeats = winner_k
+        
+        # Versione standard (Lista di cloni):
+        batch = [winner_trip] + [deepcopy(winner_trip) for _ in range(winner_k - 1)]
+        best_trips.extend(batch)
         
     return Solution(best_trips)

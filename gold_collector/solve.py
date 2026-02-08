@@ -79,36 +79,7 @@ class Archipelago:
         best_costs = [isl.population[0].cost for isl in self.islands]
         print(f"--- Migration Complete. Island Bests: {['{:.2f}'.format(c) for c in best_costs]} ---")
 
-    def solution_to_cities(self, solution: Solution):
-        """
-        Converts a Solution object (with Trips and Paths) into the required output format:
-        List of (node_id, gold_picked_up_here) in the order they are visited.
-        """
-        # Extract the full path from the solution
-        cities = []
-        for trip in solution.trips:
-            # Convert tuples to lists immediately so they are mutable
-            # trip.path is [(node, gold), ...]
-            path_as_lists = [list(step) for step in trip.path]
-            cities.extend(path_as_lists)
 
-        previous = 0.0
-        for city in cities:
-            node_id = city[0]
-            if node_id != 0:
-                current_cumulative = city[1]
-                city[1] = current_cumulative - previous
-                
-                # Sanity fix for float noise (e.g., -1e-16 becomes 0.0)
-                if abs(city[1]) < 1e-9: 
-                    city[1] = 0.0
-                
-                previous = current_cumulative
-            else:
-                # At base, we reset our 'previous' tracker because the truck is empty
-                previous = 0.0
-                # The delta at base is always 0 (we don't 'collect' at base)
-                city[1] = 0.0
 
     def run_parallel(self, total_generations=200, migration_interval=20):
         # --- LOGGING SETUP ---
@@ -152,7 +123,7 @@ class Archipelago:
         final_solution = best_solution.to_solution(self.problem)
 
         # Extract the full path from the solution
-        cities = self.solution_to_cities(final_solution)
+        cities = solution_to_cities(final_solution)
 
         # Now we check if this final list is actually valid
         is_valid, message = verify_delta_solution(cities, self.problem, tolerance=1e-3)
@@ -165,6 +136,37 @@ class Archipelago:
 
         return cities, final_solution.total_cost
         
+
+def solution_to_cities(solution: Solution):
+        """
+        Converts a Solution object (with Trips and Paths) into the required output format:
+        List of (node_id, gold_picked_up_here) in the order they are visited.
+        """
+        # Extract the full path from the solution
+        cities = []
+        for trip in solution.trips:
+            # Convert tuples to lists immediately so they are mutable
+            # trip.path is [(node, gold), ...]
+            path_as_lists = [list(step) for step in trip.path]
+            cities.extend(path_as_lists)
+
+        previous = 0.0
+        for city in cities:
+            node_id = city[0]
+            if node_id != 0:
+                current_cumulative = city[1]
+                city[1] = current_cumulative - previous
+                
+                # Sanity fix for float noise (e.g., -1e-16 becomes 0.0)
+                if abs(city[1]) < 1e-9: 
+                    city[1] = 0.0
+                
+                previous = current_cumulative
+            else:
+                # At base, we reset our 'previous' tracker because the truck is empty
+                previous = 0.0
+                # The delta at base is always 0 (we don't 'collect' at base)
+                city[1] = 0.0
 
 
 def verify_delta_solution(cities_list, problem, tolerance=1e-3):
@@ -229,13 +231,15 @@ def verify_delta_solution(cities_list, problem, tolerance=1e-3):
 
 def solve(problem: Problem) -> Solution:
 
-    archipelago = Archipelago(problem)
 
     if problem.beta <1.2 or problem.alpha < 2*10e-3:
+        print("Running Parallel Genetic Algorithm with Migration...")
+        archipelago = Archipelago(problem)
         solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
     else:
+        print("Running Heuristic Adaptive Split (No Parallelism)...")
         final_solution = generate_adaptive_split(problem, max_search=1000)
-        solution = (archipelago.solution_to_cities(final_solution), final_solution.total_cost)
+        solution = (solution_to_cities(final_solution), final_solution.total_cost)
     
     
     return solution
