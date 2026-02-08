@@ -24,7 +24,8 @@ class Trip:
             # ACCURATE MODE: Run A* dynamically (slow but exact for final verification)
             self.path = self.compute_optimal_path(problem, use_dijkstra=use_dijkstra)
             
-        self.total_cost = self.compute_cost(problem) * self.times_taken
+        self.single_cost = self.compute_cost(problem)
+        self.total_cost = self.single_cost * self.times_taken
 
     def change_times_taken(self, new_times):
         if new_times <= 0:
@@ -35,8 +36,7 @@ class Trip:
             
         # Update cost proportionally
         # (Assuming the path doesn't change, just the number of repetitions)
-        unit_cost = self.total_cost / self.times_taken
-        self.total_cost = unit_cost * new_times
+        self.total_cost = self.single_cost * new_times
         self.times_taken = new_times
         return self
 

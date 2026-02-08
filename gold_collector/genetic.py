@@ -181,30 +181,33 @@ class Individual:
                     if new_times == t.times_taken: continue
 
                     # 3. CONSERVATION OF GOLD
-                    ratio = t.times_taken / new_times 
                     new_cities = []
                     for city_id, old_amount in t.cities:
-                        new_amount = (old_amount * t.times_taken) / new_times
+                        total_stack_gold = old_amount * t.times_taken
+                        
+                        # --- CLAMP TO REALITY ---
+                        # Ensure we don't accidentally create gold due to float drift
+                        max_available = problem.graph.nodes[city_id]['gold']
+                        if total_stack_gold > max_available:
+                            total_stack_gold = max_available
+                        
+                        # Recalculate per-visit amount
+                        new_amount = total_stack_gold / new_times
                         new_cities.append((city_id, new_amount))
                     
-                    # --- FIX START ---
-                    # DO NOT just deepcopy the old trip. The old path has stale gold values!
-                    # You must create a new Trip object so it rebuilds the path with new_amount.
-                    
+                    # 4. Create new Trip (as discussed before)
                     new_trip = Trip(
                         cities=new_cities, 
                         problem=problem, 
                         path_matrix=path_matrix, 
                         use_precompute=use_precompute,
-                        times_taken=new_times # Pass the new times here
+                        times_taken=new_times 
                     )
                     
                     # The new_trip.__init__ automatically:
                     # 1. Rebuilds the path (putting new_amount into the (node, gold) tuples)
                     # 2. Calculates the correct cost based on that path
                     # 3. Multiplies by times_taken
-                    
-                    # --- FIX END ---
                     
                     self.cost = self.cost - t.total_cost + new_trip.total_cost
                     self.trips.remove(t)
@@ -221,68 +224,62 @@ class Individual:
         trips_from_A = random.sample(self.trips, num_to_take)
         
         for t in trips_from_A:
-            # We must deepcopy to avoid linking objects
             new_t = copy.deepcopy(t)
             child_trips.append(new_t)
-            
-            # Track gold: Amount per visit * Number of visits
             for city_id, amount in new_t.cities:
                 collected_gold[city_id] += amount * new_t.times_taken
 
         # --- STEP 2: Inherit from Parent B ---
         for t in other_parent.trips:
-            # We calculate if this trip is valid given the gold remaining
-            
-            # Check the PRIMARY city of this trip (assuming simple trips)
-            # If multi-city trip, this gets complex. Let's assume mostly 1-city trips or check all.
-            can_add = True
+            # Check if this trip is useful
             limit_factor = float('inf') 
+            useful = False
             
-            for city_id, intended_amount_per_visit in t.cities:
+            for city_id, amount_per_visit in t.cities:
                 total_available = problem.graph.nodes[city_id]['gold']
                 current_collected = collected_gold.get(city_id, 0.0)
                 remaining = total_available - current_collected
                 
-                if remaining < 1e-6: # Basically empty
-                    can_add = False
-                    break
-                
-                # How many times can we run this trip before draining the city?
-                # max_reps = remaining / intended_amount
-                max_reps = int(remaining / intended_amount_per_visit)
-                
-                if max_reps < limit_factor:
-                    limit_factor = max_reps
+                # If even a tiny bit of gold is left, this trip might be useful
+                if remaining > 1e-6:
+                    useful = True
+                    # How many full repeats fit?
+                    # Use round to avoid 2.99999 becoming 2
+                    max_reps = int(remaining / amount_per_visit + 1e-9)
+                    if max_reps < limit_factor:
+                        limit_factor = max_reps
+                else:
+                    # City is full, we can't visit it with this trip configuration
+                    limit_factor = 0
             
-            if can_add and limit_factor > 0:
-                # We can add this trip, but maybe fewer times than Parent B had
+            if useful and limit_factor > 0:
                 new_t = copy.deepcopy(t)
-                
-                # Cap the times_taken
-                actual_times = min(new_t.times_taken, limit_factor)
-                new_t.change_times_taken(actual_times)
+                new_t.change_times_taken(min(new_t.times_taken, limit_factor))
                 
                 child_trips.append(new_t)
-                
-                # Update collected gold
                 for city_id, amount in new_t.cities:
                     collected_gold[city_id] += amount * new_t.times_taken
 
-        # --- STEP 3: Repair ---
-        # In case we have any cities that are still significantly under-collected, we can add new trips to "sweep up" the remaining gold.
-        # we do that by using a simple strategy: for each city that has more than 1.0 gold left, we create a new trip that takes all the remaining gold in one visit (times_taken=1).
-        # This is a baseline-like startegy.
+        # --- STEP 3: REPAIR (The Sweeper) ---
         missing_cities = []
         for c in range(1, problem.num_cities):
             total = problem.graph.nodes[c]['gold']
             current = collected_gold.get(c, 0.0)
-            if total - current > 1e-6: # If there's still gold left, we need to collect it
+            
+            # CRITICAL FIX: The threshold must be tiny (1e-5), NOT 1.0
+            if total - current > 1e-5:
+                # We append the exact missing amount
                 missing_cities.append((c, total - current))
         
         for city_data in missing_cities:
-            # For the repair, we create a trip with times_taken=1 that takes ALL remaining gold
-            # This effectively "sweeps up" the dust
-            child_trips.append(Trip([city_data], problem, path_matrix=path_matrix, use_precompute=use_precompute, times_taken=1))
+            # Create a dedicated "Sweeper Trip" for this dust
+            child_trips.append(Trip(
+                cities=[city_data], 
+                problem=problem, 
+                path_matrix=path_matrix, 
+                use_precompute=use_precompute, 
+                times_taken=1
+            ))
             
         return Individual(child_trips, sum(t.total_cost for t in child_trips))
 

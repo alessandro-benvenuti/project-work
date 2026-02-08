@@ -267,15 +267,12 @@ def generate_random_chunk_visits(problem, max_split=4):
             
     return Solution(trips)
 
-def generate_adaptive_split(problem, max_search=1000, path_matrix=None, use_precompute=False):
+def generate_adaptive_split(problem, max_search=50, path_matrix=None, use_precompute=False):
     """
     Heuristic 6: Adaptive Optimal Split (Binary Search Optimized)
-    
-    Uses Binary Search to find the optimal 'k' visits minimizing total cost.
-    Complexity: O(log max_search) instead of O(max_search).
+    FIXED: Prevents pairing 'k' visits with 'k-1' gold payloads.
     """
     
-    # If Beta <= 1, splitting doesn't help. Just return the standard baseline.
     if problem.beta <= 1:
         return generate_baseline(problem, path_matrix=path_matrix, use_precompute=use_precompute)
 
@@ -286,25 +283,20 @@ def generate_adaptive_split(problem, max_search=1000, path_matrix=None, use_prec
         if total_gold == 0: continue
         
         # --- Helper: calculate cost for K trips ---
-        # We use a local cache to avoid recalculating the same k twice (optional but useful)
         def get_total_strategy_cost(k):
             gold_per_visit = total_gold / k
-            
-            # Create a SINGLE representative trip for this city with the given gold_per_visit
             temp_trip = Trip(
                 cities=[(city, gold_per_visit)], 
                 problem=problem,
                 path_matrix=path_matrix,
                 use_precompute=use_precompute
             )
-            # Total cost = cost of one trip * k
             return temp_trip.total_cost * k, temp_trip
 
-        # --- BINARY SEARCH FOR MINIMUM ---
+        # --- BINARY SEARCH ---
         low = 1
         high = max_search
         
-        # Save the best trip found during the search to avoid recreating it at the end
         best_k = 1
         best_trip_obj = None
         min_cost = float('inf')
@@ -312,41 +304,37 @@ def generate_adaptive_split(problem, max_search=1000, path_matrix=None, use_prec
         while low < high:
             mid = (low + high) // 2
             
-            # Calculate cost at 'mid' and 'mid+1' to understand the slope
+            # 1. Capture BOTH trip objects
             cost_mid, trip_mid = get_total_strategy_cost(mid)
-            cost_next, _       = get_total_strategy_cost(mid + 1)
+            cost_next, trip_next = get_total_strategy_cost(mid + 1) # <--- Capture trip_next
             
-            # Update the absolute best if we encounter it
+            # 2. Update Best if 'mid' is better
             if cost_mid < min_cost:
                 min_cost = cost_mid
                 best_k = mid
                 best_trip_obj = trip_mid
             
-            if cost_next < min_cost: # Defensive check on next
+            # 3. Update Best if 'mid+1' is better
+            if cost_next < min_cost: 
                  min_cost = cost_next
                  best_k = mid + 1
-                 # We don't save the 'next' object for efficiency, we recreate it only if it wins at the end
-                 # (or we could save it, but it complicates the loop)
-            # Binary Search Logic for Convex Functions
+                 # --- THE FIX IS HERE ---
+                 best_trip_obj = trip_next # <--- We must save the matching trip!
+            
+            # Binary Search Direction
             if cost_mid < cost_next:
-                # The curve rises to the right, the minimum is to the left (or is mid)
                 high = mid
             else:
-                # The curve descends to the right, the minimum is further ahead
                 low = mid + 1
         
-        # At the end of the loop, 'low' is the optimum (or very close)
+        # Final cleanup (check if 'low' is better than what we found during search)
         final_k = low
         final_cost, final_trip = get_total_strategy_cost(final_k)
         
-        # Final check: better the one found in the loop or the "best" tracked?
-        # (Generally they coincide, but for safety we take the best)
         if final_cost < min_cost:
             winner_trip = final_trip
             winner_k = final_k
         else:
-            # If we had found a better point before (rare but possible at the edges)
-            # If best_trip_obj is None (e.g., loop never entered), use final
             if best_trip_obj is None:
                 winner_trip = final_trip
                 winner_k = final_k
@@ -354,10 +342,10 @@ def generate_adaptive_split(problem, max_search=1000, path_matrix=None, use_prec
                 winner_trip = best_trip_obj
                 winner_k = best_k
 
-        # --- Final List Creation ---
-        # We create a trip with the optimal gold per visit,
-        # repetaed 'winner_k' times
-        best_trip = winner_trip.change_times_taken(winner_k)  # This updates the total cost inside the trip object
+        # Apply the winner configuration
+        # IMPORTANT: winner_trip was created with gold = total/winner_k
+        # So repeating it winner_k times yields exactly total gold.
+        best_trip = winner_trip.change_times_taken(winner_k)
         best_trips.append(best_trip)
         
     return Solution(best_trips)

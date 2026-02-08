@@ -14,7 +14,7 @@ from gold_collector.utils import generate_baseline, generate_topology_savings, g
 from gold_collector.genetic import Island, run_island_evolution
 
 class Archipelago:
-    def __init__(self, problem, num_islands=3, population_size=50):
+    def __init__(self, problem, num_islands=4, population_size=50, offspring_size=20):
         self.problem = problem
         self.islands = []
         self.distance_matrix = compute_distance_matrix(problem)
@@ -30,6 +30,8 @@ class Archipelago:
         else:
             self.path_matrix = None
 
+        strategies = ["random", "merge", "adjust_repeats", "merge"]
+
         # Initialize islands with different strategies or seed solutions
         for i in range(num_islands):
             # Each island gets a different seed solution
@@ -38,16 +40,17 @@ class Archipelago:
             elif i==1:
                 seed_solution = generate_topology_savings(problem, path_matrix=self.path_matrix, use_precompute=self.use_precompute)
             else:
-                seed_solution = generate_adaptive_split(problem, path_matrix=self.path_matrix, use_precompute=self.use_precompute)
+                seed_solution = generate_adaptive_split(problem, path_matrix=self.path_matrix, use_precompute=self.use_precompute, max_search=1000)
 
             island = Island(
                 island_id=i,
-                strategy="random",
+                strategy=strategies[i % len(strategies)],
                 seed_solution=seed_solution,
                 problem=problem,
                 path_matrix=self.path_matrix,
                 use_precompute=self.use_precompute,
-                population_size=population_size
+                population_size=population_size,
+                offspring_size=offspring_size
             )
             self.islands.append(island)
 
@@ -134,7 +137,7 @@ class Archipelago:
         else:
             print(f"FINAL CHECK PASSED")
 
-        return cities, final_solution.total_cost
+        return cities, final_solution.total_cost, is_valid, message
         
 
 def solution_to_cities(solution: Solution):
@@ -238,7 +241,7 @@ def verify_delta_solution(cities_list, problem, tolerance=1e-3):
 def solve(problem: Problem) -> Solution:
 
 
-    if problem.beta <10:
+    if problem.beta < 10.0:
         print("Running Parallel Genetic Algorithm with Migration...")
         archipelago = Archipelago(problem)
         solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
@@ -248,7 +251,11 @@ def solve(problem: Problem) -> Solution:
         # In general it makes no sese to run the genetic algorithm
         print("Running Heuristic Adaptive Split (No Parallelism)...")
         final_solution = generate_adaptive_split(problem, max_search=1000)
-        solution = (solution_to_cities(final_solution), final_solution.total_cost)
+        cities = solution_to_cities(final_solution)
+        is_valid, message = verify_delta_solution(cities, problem, tolerance=1e-3)
+        if not is_valid:
+            print(f"FINAL CHECK FAILED: {message}")
+        return cities, final_solution.total_cost, is_valid, message
     
     
     return solution
