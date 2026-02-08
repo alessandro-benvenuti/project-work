@@ -145,10 +145,14 @@ def solution_to_cities(solution: Solution):
         # Extract the full path from the solution
         cities = []
         for trip in solution.trips:
-            # Convert tuples to lists immediately so they are mutable
-            # trip.path is [(node, gold), ...]
+            # Convert tuples to lists
             path_as_lists = [list(step) for step in trip.path]
-            cities.extend(path_as_lists)
+            
+            # --- EXPANSION STEP ---
+            # Repeat the path sequence N times
+            for _ in range(trip.times_taken):
+                # We must append a COPY of the list structure to avoid mutability issues later when we adjust the deltas
+                cities.extend(deepcopy(path_as_lists))
 
         previous = 0.0
         for city in cities:
@@ -167,6 +171,8 @@ def solution_to_cities(solution: Solution):
                 previous = 0.0
                 # The delta at base is always 0 (we don't 'collect' at base)
                 city[1] = 0.0
+
+        return cities
 
 
 def verify_delta_solution(cities_list, problem, tolerance=1e-3):
@@ -232,11 +238,14 @@ def verify_delta_solution(cities_list, problem, tolerance=1e-3):
 def solve(problem: Problem) -> Solution:
 
 
-    if problem.beta <1.2 or problem.alpha < 2*10e-3:
+    if problem.beta <10:
         print("Running Parallel Genetic Algorithm with Migration...")
         archipelago = Archipelago(problem)
         solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
     else:
+        # If beta is very high, the cost is dominated by the gold term, so we can use a more aggressive heuristic that focuses on gold collection without worrying too much about distance. 
+        # The Adaptive Split heuristic is designed for this kind of scenario, as it optimizes the number of visits to each city based on the gold available and the cost function's sensitivity to gold.
+        # In general it makes no sese to run the genetic algorithm
         print("Running Heuristic Adaptive Split (No Parallelism)...")
         final_solution = generate_adaptive_split(problem, max_search=1000)
         solution = (solution_to_cities(final_solution), final_solution.total_cost)

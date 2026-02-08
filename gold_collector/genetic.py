@@ -24,6 +24,7 @@ class Individual:
             exact_trip = Trip(
                 cities=tcities, 
                 problem=problem,
+                times_taken=trip.times_taken,  # Preserve the number of repeats
                 path_matrix=None,         # Ensure no matrix is used
                 use_precompute=False,     # Force EXACT mode (A*)
                 use_dijkstra=True         # Force Dijkstra to ensure we get the true shortest path (no heuristic)
@@ -37,8 +38,8 @@ class Individual:
         s = strategy
         for _ in range(num_mutations):
             # Depending on the strategy, we can perform different types of mutations:
-            if s == "random" or s not in ["merge", "split", "swap", "gold_split"]:
-                strategy = random.choice(["merge", "split", "swap", "gold_split"])
+            if s == "random" or s not in ["merge", "split", "swap", "gold_split", "adjust_repeats"]:
+                strategy = random.choice(["merge", "split", "swap", "gold_split", "adjust_repeats"])
             
             if strategy == "merge":
                 # Merge two random trips into one (if possible)
@@ -63,9 +64,15 @@ class Individual:
                     new_trip = Trip(cities, problem, path_matrix=path_matrix, use_precompute=use_precompute)
 
                     if new_trip:
-                        self.cost = self.cost - t1.total_cost - t2.total_cost + new_trip.total_cost
-                        self.trips.remove(t1)
-                        self.trips.remove(t2)
+                        self.cost = self.cost - t1.total_cost / t1.times_taken - t2.total_cost / t2.times_taken + new_trip.total_cost
+                        if t1.times_taken > 1:
+                            t1.change_times_taken(t1.times_taken - 1)
+                        else:
+                            self.trips.remove(t1)
+                        if t2.times_taken > 1:
+                            t2.change_times_taken(t2.times_taken - 1)
+                        else:
+                            self.trips.remove(t2)
                         self.trips.append(new_trip)
 
             elif strategy == "split":
@@ -80,8 +87,11 @@ class Individual:
                     t1 = Trip(t1_cities, problem, path_matrix=path_matrix, use_precompute=use_precompute)
                     t2 = Trip(t2_cities, problem, path_matrix=path_matrix, use_precompute=use_precompute)
                     
-                    self.cost = self.cost - t.total_cost + t1.total_cost + t2.total_cost
-                    self.trips.remove(t)
+                    self.cost = self.cost - t.total_cost / t.times_taken + t1.total_cost + t2.total_cost
+                    if t.times_taken > 1:
+                        t.change_times_taken(t.times_taken - 1)
+                    else:
+                        self.trips.remove(t)
                     self.trips.append(t1)
                     self.trips.append(t2)
                 else:
@@ -113,9 +123,15 @@ class Individual:
                         new_t2 = Trip(c_list2, problem, path_matrix=path_matrix, use_precompute=use_precompute)
                         
                         # Update Cost and Population
-                        self.cost = self.cost - t1.total_cost - t2.total_cost + new_t1.total_cost + new_t2.total_cost
-                        self.trips.remove(t1)
-                        self.trips.remove(t2)
+                        self.cost = self.cost - t1.total_cost / t1.times_taken - t2.total_cost / t2.times_taken + new_t1.total_cost + new_t2.total_cost
+                        if t1.times_taken > 1:
+                            t1.change_times_taken(t1.times_taken - 1)
+                        else:
+                            self.trips.remove(t1)
+                        if t2.times_taken > 1:
+                            t2.change_times_taken(t2.times_taken - 1)
+                        else:
+                            self.trips.remove(t2)
                         self.trips.append(new_t1)
                         self.trips.append(new_t2)
                 else:
@@ -137,78 +153,136 @@ class Individual:
                     t1 = Trip(new_cities, problem, path_matrix=path_matrix, use_precompute=use_precompute)
                     t2 = Trip(old_cities, problem, path_matrix=path_matrix, use_precompute=use_precompute)
                     
-                    self.cost = self.cost - t.total_cost + t1.total_cost + t2.total_cost
-                    self.trips.remove(t)
+                    self.cost = self.cost - t.total_cost / t.times_taken + t1.total_cost + t2.total_cost
+                    if t.times_taken > 1:
+                        t.change_times_taken(t.times_taken - 1)
+                    else:
+                        self.trips.remove(t)
                     self.trips.append(t1)
                     self.trips.append(t2)
+
+            elif strategy == "adjust_repeats":
+                # Select a trip that acts as a "stack" of identical journeys
+                candidates = [t for t in self.trips if t.times_taken > 0]
+                if candidates:
+                    t = random.choice(candidates)
+                    
+                    # 1. Calculate the TOTAL gold this stack is currently responsible for
+                    # (e.g. 10 trips * 5.0 gold = 50.0 total)
+                    current_stack_gold = sum(amount for _, amount in t.cities) * t.times_taken
+                    
+                    if current_stack_gold <= 0: continue
+
+                    # 2. Determine new number of repeats
+                    # We try to nudge it slightly (exploration)
+                    change = random.choice([-1, 1, -2, 2, -5, 5])
+                    new_times = max(1, t.times_taken + change)
+                    
+                    if new_times == t.times_taken: continue
+
+                    # 3. CONSERVATION OF GOLD
+                    ratio = t.times_taken / new_times 
+                    new_cities = []
+                    for city_id, old_amount in t.cities:
+                        new_amount = (old_amount * t.times_taken) / new_times
+                        new_cities.append((city_id, new_amount))
+                    
+                    # --- FIX START ---
+                    # DO NOT just deepcopy the old trip. The old path has stale gold values!
+                    # You must create a new Trip object so it rebuilds the path with new_amount.
+                    
+                    new_trip = Trip(
+                        cities=new_cities, 
+                        problem=problem, 
+                        path_matrix=path_matrix, 
+                        use_precompute=use_precompute,
+                        times_taken=new_times # Pass the new times here
+                    )
+                    
+                    # The new_trip.__init__ automatically:
+                    # 1. Rebuilds the path (putting new_amount into the (node, gold) tuples)
+                    # 2. Calculates the correct cost based on that path
+                    # 3. Multiplies by times_taken
+                    
+                    # --- FIX END ---
+                    
+                    self.cost = self.cost - t.total_cost + new_trip.total_cost
+                    self.trips.remove(t)
+                    self.trips.append(new_trip)
                 
         return self
     
     def crossover(self, other_parent, problem, path_matrix=None, use_precompute=False):
-        """
-        Greedy Route Crossover (Inherit & Trim)
-        1. Inherit random trips from Self (Parent A).
-        2. Inherit trips from Other (Parent B), but trim already-collected gold.
-        3. If gold is still missing, add simple recovery trips.
-        """
         child_trips = []
-        
-        # Track gold collected by the Child so far
-        # Initialize with 0.0 collected for all cities
         collected_gold = {c: 0.0 for c in range(problem.num_cities)}
         
-        # --- STEP 1: Inherit from Parent A (Self) ---
-        # Take random 50% of trips
+        # --- STEP 1: Inherit from Parent A ---
         num_to_take = max(1, len(self.trips) // 2)
         trips_from_A = random.sample(self.trips, num_to_take)
         
         for t in trips_from_A:
-            # Add trip to child
-            child_trips.append(copy.deepcopy(t))
+            # We must deepcopy to avoid linking objects
+            new_t = copy.deepcopy(t)
+            child_trips.append(new_t)
             
-            # Update gold tracker
-            for city_id, amount in t.cities:
-                collected_gold[city_id] += amount
+            # Track gold: Amount per visit * Number of visits
+            for city_id, amount in new_t.cities:
+                collected_gold[city_id] += amount * new_t.times_taken
 
-        # --- STEP 2: Inherit from Parent B (Other) ---
-        # We try to add ALL trips from B, but we "clean" them first.
-        
+        # --- STEP 2: Inherit from Parent B ---
         for t in other_parent.trips:
-            new_cities_for_trip = []
+            # We calculate if this trip is valid given the gold remaining
             
-            for city_id, intended_amount in t.cities:
+            # Check the PRIMARY city of this trip (assuming simple trips)
+            # If multi-city trip, this gets complex. Let's assume mostly 1-city trips or check all.
+            can_add = True
+            limit_factor = float('inf') 
+            
+            for city_id, intended_amount_per_visit in t.cities:
                 total_available = problem.graph.nodes[city_id]['gold']
-                already_collected = collected_gold.get(city_id, 0.0)
-                remaining = total_available - already_collected
+                current_collected = collected_gold.get(city_id, 0.0)
+                remaining = total_available - current_collected
                 
-                # If there is gold left to collect
-                if remaining > 1.0: # Tolerance for float noise
-                    # We take the intended amount, OR whatever is left, whichever is smaller
-                    amount_to_take = min(intended_amount, remaining)
-                    
-                    new_cities_for_trip.append((city_id, amount_to_take))
-                    collected_gold[city_id] += amount_to_take
+                if remaining < 1e-6: # Basically empty
+                    can_add = False
+                    break
+                
+                # How many times can we run this trip before draining the city?
+                # max_reps = remaining / intended_amount
+                max_reps = int(remaining / intended_amount_per_visit)
+                
+                if max_reps < limit_factor:
+                    limit_factor = max_reps
             
-            # If the trimmed trip still has stops, add it
-            if new_cities_for_trip:
-                # We must create a new Trip object (runs A*)
-                new_trip = Trip(new_cities_for_trip, problem, path_matrix=path_matrix, use_precompute=use_precompute)
-                if new_trip.total_cost != float('inf'):
-                    child_trips.append(new_trip)
+            if can_add and limit_factor > 0:
+                # We can add this trip, but maybe fewer times than Parent B had
+                new_t = copy.deepcopy(t)
+                
+                # Cap the times_taken
+                actual_times = min(new_t.times_taken, limit_factor)
+                new_t.change_times_taken(actual_times)
+                
+                child_trips.append(new_t)
+                
+                # Update collected gold
+                for city_id, amount in new_t.cities:
+                    collected_gold[city_id] += amount * new_t.times_taken
 
-        # --- STEP 3: Repair (The "Dust" Collector) ---
-        # Check if any city is missed entirely (rare but possible)
+        # --- STEP 3: Repair ---
+        # In case we have any cities that are still significantly under-collected, we can add new trips to "sweep up" the remaining gold.
+        # we do that by using a simple strategy: for each city that has more than 1.0 gold left, we create a new trip that takes all the remaining gold in one visit (times_taken=1).
+        # This is a baseline-like startegy.
         missing_cities = []
         for c in range(1, problem.num_cities):
             total = problem.graph.nodes[c]['gold']
             current = collected_gold.get(c, 0.0)
-            if total - current > 1.0:
+            if total - current > 1e-6: # If there's still gold left, we need to collect it
                 missing_cities.append((c, total - current))
         
-        # If we missed anything, just add simple dedicated trips (Baseline style)
-        # The mutation steps later will optimize these bad trips into good ones.
         for city_data in missing_cities:
-            child_trips.append(Trip([city_data], problem, path_matrix=path_matrix, use_precompute=use_precompute))
+            # For the repair, we create a trip with times_taken=1 that takes ALL remaining gold
+            # This effectively "sweeps up" the dust
+            child_trips.append(Trip([city_data], problem, path_matrix=path_matrix, use_precompute=use_precompute, times_taken=1))
             
         return Individual(child_trips, sum(t.total_cost for t in child_trips))
 

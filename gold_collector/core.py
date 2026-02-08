@@ -5,7 +5,7 @@ import networkx as nx
 import heapq
 
 class Trip:
-    def __init__(self, cities: list, problem, path_matrix=None, use_precompute=False, use_dijkstra=False):
+    def __init__(self, cities: list, problem, times_taken=1, path_matrix=None, use_precompute=False, use_dijkstra=False):
         """
         :param cities: List of (city_index, gold_amount)
         :param path_matrix: Dict or Matrix [source][target] -> List of nodes (path)
@@ -14,16 +14,31 @@ class Trip:
         """
         self.cities = cities
         self.total_gold = sum([gold for _, gold in cities])
+        self.times_taken = times_taken
         
         # Determine strategy
         if use_precompute and path_matrix is not None:
             # FAST MODE: Use precomputed geometric paths
             self.path = self._build_path_from_matrix(path_matrix)
-            self.total_cost = self.compute_cost(problem)
         else:
             # ACCURATE MODE: Run A* dynamically (slow but exact for final verification)
             self.path = self.compute_optimal_path(problem, use_dijkstra=use_dijkstra)
-            self.total_cost = self.compute_cost(problem)
+            
+        self.total_cost = self.compute_cost(problem) * self.times_taken
+
+    def change_times_taken(self, new_times):
+        if new_times <= 0:
+            # Handle the case where we reduce it to 0 (remove trip)
+            self.times_taken = 0
+            self.total_cost = 0
+            return self
+            
+        # Update cost proportionally
+        # (Assuming the path doesn't change, just the number of repetitions)
+        unit_cost = self.total_cost / self.times_taken
+        self.total_cost = unit_cost * new_times
+        self.times_taken = new_times
+        return self
 
     
     def _build_path_from_matrix(self, path_matrix):
