@@ -212,5 +212,6 @@ def main():
     # print(Problem(1_000, density=1, alpha=2, beta=1).baseline())
     # print(Problem(1_000, density=1, alpha=1, beta=2).baseline())
 
+
 if __name__ == '__main__':
     main()

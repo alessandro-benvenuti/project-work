@@ -227,6 +227,14 @@ def crossover(self, other_parent, problem):
 
 ```
 
+### 3.5 Algorithmic Decisions & Tuning
+The evolutionary algorithm utilizes a fixed parameter schedule (200 generations, offspring size 20, tournament size 3, and mutation probability 0.2) rather than adaptive or decaying rates.<br>
+This design choice stems from our initialization strategy. Since the population is seeded with strong heuristics (Adaptive Split, Topology Savings), the initial solutions are already positioned in deep local optima. We observed that:
+- Exploitation Risks: A traditional "exploitation-heavy" approach (e.g., low mutation, high selection pressure) caused immediate stagnation, as the algorithm was unable to escape the basins of attraction formed by the heuristic seeds.
+- Exploration Necessity: By maintaining high exploration pressure throughout the entire run (via diverse mutation operators and fixed tournament sizes), we force the algorithm to break structural constraints and discover novel improvements that the heuristics missed.
+
+While further hyperparameter tuning could potentially yield marginal gains, this configuration provided the most robust balance between convergence speed and solution quality during our experiments.
+
 ---
 
 ## 4. Technical Optimizations
@@ -315,7 +323,68 @@ The project is organized into a modular package structure to separate core logic
 
 ---
 
-## 6. Installation & Usage
+## 7. Experimental Results
+
+We evaluated the solver on **256 different problem configurations**, varying the number of cities ($N$), graph density, and cost function parameters ($\alpha, \beta$).
+
+The full raw data can be found here: [📄 logs/results.csv](logs/results.csv)
+
+### 6.1 Summary Metrics
+
+#### Impact of Problem Size ($N$)
+As the number of cities increases, the problem complexity grows exponentially. The Parallel Genetic Algorithm maintains solution quality even for large instances ($N = 1000$), though computation time increases naturally (while always being on average under 10 minutes).
+
+| num_cities | Avg Improvement (%) | Avg Time (s) |
+| --- | --- | --- |
+| 50 | 57.63 | 27.60 |
+| 100 | 57.51 | 25.33 |
+| 200 | 56.06 | 46.55 |
+| 1000 | 54.53 | 573.54 |
+
+#### Impact of Graph Density
+This parameters determines how well the graph is connected.
+| density | Avg Improvement (%) | Avg Time (s) |
+| --- | --- | --- |
+| 0.10 | 58.61 | 87.02 |
+| 0.20 | 58.01 | 96.71 |
+| 0.50 | 56.63 | 173.45 |
+| 1.00 | 52.47 | 315.83 |
+
+#### Impact of Cost Multiplier ($\alpha$)
+This parameter corresponds to the cost penality factor.
+| alpha | Avg Improvement (%) | Avg Time (s) |
+| --- | --- | --- |
+| 0.10 | 55.65 | 155.81 |
+| 1.00 | 56.71 | 154.47 |
+| 2.00 | 56.68 | 157.70 |
+| 5.00 | 56.68 | 205.04 |
+
+#### Impact of Cost Exponent ($\beta$)
+This is the most critical parameter. It dictates whether the problem deals with linear or non-linear costs. Indeed as seen before most of the logic behind this project is focused on finding strategies to handle different values of $\beta$.
+| beta | Avg Improvement (%) | Avg Time (s) |
+| --- | --- | --- |
+| 0.10 | 27.02 | 139.42 |
+| 1.00 | 0.22 | 141.88 |
+| 2.00 | 98.47 | 292.79 |
+| 5.00 | 100.00 | 98.93 |
+
+
+### 6.2 Analysis of Results
+
+- **1. Consistent Performance at Scale**
+    The data demonstrates that the solver is highly scalable. Independent of the problem size (), graph density, or the linear weight factor , the algorithm consistently finds solutions that are **54% to 58% better** than the baseline. This proves that the core logic—optimizing path geometry via the Island Model—is effective across a wide range of graph structures.
+
+- **2. The Beta Regimes**
+    The value of  fundamentally changes the optimal strategy, and our results reflect three distinct behaviors:
+
+    1. <strong> $\beta<1$ Distance Dominates</strong>: The cost function is sub-linear regarding weight. The problem behaves similarly to a standard Traveling Salesperson Problem (TSP). The baseline strategy (returning to base after every city) maximizes travel distance and is therefore extremely inefficient. Our Genetic Algorithm exploits this by linking many cities into single tours, achieving significant savings (~27%).
+    2.  <strong> $\beta \approx 1$ The Tipping Point</strong>: At , the cost of carrying weight scales linearly with distance. In this specific regime, the baseline strategy of "emptying the truck" after every city is actually a very strong local optimum, as it minimizes the weight-distance product. Our solver matches this performance (0.22% improvement), indicating that the baseline is near-optimal for this specific physics configuration.
+    3.  <strong> $\beta>1$ Weight Dominates</strong>: The penalty for carrying weight becomes exponential. The baseline strategy fails catastrophically here because it forces the agent to carry a *full* city's gold load at once. Our **Adaptive Split** heuristic dominates in this regime by identifying that it is cheaper to visit a city multiple times (carrying small fractions of gold) than to visit it once. This strategy yields massive cost reductions, approaching **99-100% improvement** over the naive approach.
+
+
+---
+
+## 7. Installation & Usage
 
 ### Prerequisites
 
@@ -358,7 +427,7 @@ The script will:
 ---
 
 
-## 7. Acknowledgments
+## 8. Acknowledgments
 
 This project was developed individually, with the following notes on collaboration and tools:
 
