@@ -10,7 +10,7 @@ import random
 import os
 
 from gold_collector.core import Solution, Trip
-from gold_collector.utils import generate_baseline, generate_topology_savings, generate_split_visits, generate_random_chunk_visits, generate_adaptive_split, compute_distance_matrix, precompute_weighted_paths
+from gold_collector.utils import generate_baseline, generate_topology_savings, generate_adaptive_split, compute_distance_matrix, precompute_weighted_paths
 from gold_collector.genetic import Island, run_island_evolution
 
 class Archipelago:
@@ -19,8 +19,8 @@ class Archipelago:
         self.islands = []
         self.distance_matrix = compute_distance_matrix(problem)
 
-        # Determine if we should use the heuristic precomputation based on problem size and beta:
-        # practical threshold can be tuned based on experiments. Here we choose num_cities > 200 as a heuristic cutoff for when to use the approximation.
+        # Determine if we should use the heuristic precomputation based on problem size and beta.
+        # We choose num_cities > 200 as a heuristic cutoff for when to use the approximation.
         # Also if beta <= 1 then the cost is more distance-sensitive, so we can afford to precompute paths in any case to speeed up the search.
         self.use_precompute = (problem.beta <= 1.0) or (problem.num_cities > 200)
         
@@ -30,7 +30,11 @@ class Archipelago:
         else:
             self.path_matrix = None
 
-        strategies = ["random", "merge", "adjust_repeats", "merge"]
+        if self.problem.num_cities > 50:
+            strategies = ["random", "merge", "adjust_repeats", "merge"]
+        else:
+            # Since we have few cities we cannot ensure unique solutions by forcing merge, so we use more randomization to ensure diversity in the population
+            strategies = ["random", "random", "random", "random"]
 
         # Initialize islands with different strategies or seed solutions
         for i in range(num_islands):
@@ -60,37 +64,37 @@ class Archipelago:
         Island 0 -> Island 1 -> Island 2 -> ... -> Island 0
         The Best individual of Island i replaces the Worst of Island i+1.
         """
-        # 1. Harvest the Elites
-        # We must Deep Copy so mutations in the new island don't affect the old one
-        # migrants[i] is the best solution from island i
+        # Harvest the Elites
         migrants = [deepcopy(island.population[0]) for island in self.islands]
 
-        # 2. Inject into Neighbors
+        # Inject into Neighbors
         for i in range(len(self.islands)):
-            # Determine neighbor index (Ring Topology)
             target_idx = (i + 1) % len(self.islands)
             target_island = self.islands[target_idx]
+            migrant = migrants[i]
 
-            # Replace the worst individual (last in sorted list) with the incoming elite
-            # Note: We assume population is sorted by cost (Ascending: Best -> Worst)
-            target_island.population[-1] = migrants[i]
+            # Immigration Control Check: Prevent duplicates in the target island's current population
+            current_costs = {ind.cost for ind in target_island.population}
+            if migrant.cost in current_costs:
+                # The island already has this solution.
+                continue
 
-            # Re-sort the target island immediately to maintain invariant
+            # Replace the worst
+            target_island.population[-1] = migrant
+            
+            # Update the target's history too, so it knows about this cost
+            target_island.history.add(migrant.cost)
+
+            # Re-sort
             target_island.population.sort(key=lambda x: x.cost)
 
-        # Optional: Log the migration event
+        # Log the migration event
         best_costs = [isl.population[0].cost for isl in self.islands]
         print(f"--- Migration Complete. Island Bests: {['{:.2f}'.format(c) for c in best_costs]} ---")
 
 
 
     def run_parallel(self, total_generations=200, migration_interval=20):
-        # --- LOGGING SETUP ---
-        os.makedirs("logs", exist_ok=True)
-        # Initialize/Clear the checkpoint file
-        with open("logs/checkpoint.txt", "w") as f:
-            f.write(f"STARTING EVOLUTION: {len(self.islands)} Islands, {self.islands[0].pop_size} Pop/Island\n")
-
         # We run in blocks (epochs)
         num_epochs = total_generations // migration_interval
         
@@ -98,26 +102,20 @@ class Archipelago:
             for epoch in range(num_epochs):
                 print(f"--- Epoch {epoch+1}/{num_epochs} (Running parallel) ---")
                 
-                # 1. SCATTER: Send islands to workers
+                # 1. Send islands to workers
                 # executor.map runs 'run_island_evolution' on each island in parallel
                 futures = [executor.submit(run_island_evolution, island, migration_interval) 
                            for island in self.islands]
                 
-                # 2. GATHER: Collect results back to main process
+                # 2. Collect results back to main process
                 self.islands = [f.result() for f in futures]
                 
-                # 3. MIGRATE: Main process shuffles genes
+                # 3. Migration
                 self.perform_migration()
 
-                # 4. REPORT & LOG
+                # 4. report global best after migration
                 best_ind = min((isl.population[0] for isl in self.islands), key=lambda x: x.cost)
                 print(f"Epoch {epoch+1}/{num_epochs} - Global Best: {best_ind.cost:.2f}")
-
-                # 4.1. Append to Checkpoint
-                with open("logs/checkpoint.txt", "a") as f:
-                    f.write(f"Epoch {epoch+1}: Cost {best_ind.cost}\n")
-                    for trip in best_ind.trips:
-                        f.write(f"  Trip: {[c[0] for c in trip.cities]} | Cost: {trip.total_cost}\n")
                 
                 
 
@@ -126,56 +124,64 @@ class Archipelago:
         final_solution = best_solution.to_solution(self.problem)
 
         # Extract the full path from the solution
-        cities = solution_to_cities(final_solution)
+        cities = solution_to_cities(final_solution, self.problem)
 
         # Now we check if this final list is actually valid
         is_valid, message = verify_delta_solution(cities, self.problem, tolerance=1e-3)
 
         if not is_valid:
             print(f"FINAL CHECK FAILED: {message}")
-            # Option: Return empty or raise error
         else:
             print(f"FINAL CHECK PASSED")
 
         return cities, final_solution.total_cost, is_valid, message
         
 
-def solution_to_cities(solution: Solution):
-        """
-        Converts a Solution object (with Trips and Paths) into the required output format:
-        List of (node_id, gold_picked_up_here) in the order they are visited.
-        """
-        # Extract the full path from the solution
-        cities = []
-        for trip in solution.trips:
-            # Convert tuples to lists
-            path_as_lists = [list(step) for step in trip.path]
+def solution_to_cities(solution: Solution, problem: Problem):
+    """
+    Converts a Solution object (with Trips and Paths) into the required output format:
+    List of (node_id, gold_picked_up_here) in the order they are visited.
+    Clamps values to ensure validity.
+    """
+    # Extract the full path from the solution
+    cities = []
+    for trip in solution.trips:
+        path_as_lists = [list(step) for step in trip.path]
+        for _ in range(trip.times_taken):
+            cities.extend(deepcopy(path_as_lists))
+
+    # Calculate Deltas and Clamp
+    collected_so_far = {c: 0.0 for c in range(problem.num_cities)}
+    previous = 0.0
+    
+    for city in cities:
+        node_id = city[0]
+        if node_id != 0:
+            raw_cumulative = city[1]
+            delta = raw_cumulative - previous
             
-            # --- EXPANSION STEP ---
-            # Repeat the path sequence N times
-            for _ in range(trip.times_taken):
-                # We must append a COPY of the list structure to avoid mutability issues later when we adjust the deltas
-                cities.extend(deepcopy(path_as_lists))
-
-        previous = 0.0
-        for city in cities:
-            node_id = city[0]
-            if node_id != 0:
-                current_cumulative = city[1]
-                city[1] = current_cumulative - previous
+            # Clamping logic
+            if delta > 1e-9:
+                max_val = problem.graph.nodes[node_id]['gold']
+                current_owned = collected_so_far[node_id]
+                allowed = max_val - current_owned
                 
-                # Sanity fix for float noise (e.g., -1e-16 becomes 0.0)
-                if abs(city[1]) < 1e-9: 
-                    city[1] = 0.0
+                # If we try to take more than available, clamp it
+                if delta > allowed:
+                    delta = max(0.0, allowed)
                 
-                previous = current_cumulative
+                collected_so_far[node_id] += delta
             else:
-                # At base, we reset our 'previous' tracker because the truck is empty
-                previous = 0.0
-                # The delta at base is always 0 (we don't 'collect' at base)
-                city[1] = 0.0
+                delta = 0.0
+            
+            # Update the list in-place
+            city[1] = delta
+            previous = raw_cumulative
+        else:
+            previous = 0.0
+            city[1] = 0.0
 
-        return cities
+    return cities
 
 
 def verify_delta_solution(cities_list, problem, tolerance=1e-3):
@@ -204,11 +210,10 @@ def verify_delta_solution(cities_list, problem, tolerance=1e-3):
         if i > 0:
             prev_node = cities_list[i-1][0]
             if prev_node != current_node:
-                # Note: We use the private graph accessor or public property
                 if not problem.graph.has_edge(prev_node, current_node):
                     return False, f"Step {i}: No edge between {prev_node} and {current_node}"
 
-        # B. Check for Negative Gold (Bug in delta calculation)
+        # B. Check for Negative Gold (for any bugs)
         if current_delta < -1e-9:
              return False, f"Step {i} (City {current_node}): Negative gold collected ({current_delta})."
 
@@ -239,19 +244,41 @@ def verify_delta_solution(cities_list, problem, tolerance=1e-3):
 
 
 def solve(problem: Problem) -> Solution:
+    '''
+    Depending on the value of beta, we choose different strategies:
+        If beta is low, the cost is more distance-sensitive, so we can afford to run a more complex genetic algorithm that optimizes both distance and gold collection.
+        The algorithm works by having 4 different islands:
+            Island 0 starts with the baseline solution and uses random mutations to explore the neighborhood.
+            Island 1 starts with a topology-based savings solution and focuses on merging trips to reduce distance.
+            Island 2 starts with an adaptive split solution and focuses on adjusting the number of repetitions to optimize the gold-distance tradeoff.
+            Island 3 starts with a random solution and uses random mutations to explore more diverse solutions (this is a more exploratory island that can discover novel solutions that the heuristics might miss).
+        The islands evolve in parallel and exchange their best solutions every 20 generations, allowing good solutions to propagate while maintaining diversity.
+
+        If beta is high, the cost is more gold-sensitive, so we can use a more aggressive heuristic that focuses on gold collection without worrying too much about distance. 
+        The Adaptive Split heuristic is designed for this kind of scenario, as it optimizes the number 
+        of visits to each city based on the gold available and the cost function's sensitivity to gold.
+        So we can say that running the genetic algorithm is not worth it in this case, since the search 
+        space is more dominated by the gold collection aspect and we can get good results with a well-designed 
+        heuristic that directly optimizes for that.
+
+    '''
 
 
-    if problem.beta < 10.0:
+    if problem.beta <= 2.0:
         print("Running Parallel Genetic Algorithm with Migration...")
-        archipelago = Archipelago(problem)
+        if problem.num_cities > 50:
+            archipelago = Archipelago(problem)
+        else:
+            # For smaller problems we use just 3 islands, since the last 2 would otherwise be too similar
+            archipelago = Archipelago(problem, num_islands=3)
         solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
     else:
         # If beta is very high, the cost is dominated by the gold term, so we can use a more aggressive heuristic that focuses on gold collection without worrying too much about distance. 
         # The Adaptive Split heuristic is designed for this kind of scenario, as it optimizes the number of visits to each city based on the gold available and the cost function's sensitivity to gold.
-        # In general it makes no sese to run the genetic algorithm
+        # In general it makes no sense to run the genetic algorithm
         print("Running Heuristic Adaptive Split (No Parallelism)...")
         final_solution = generate_adaptive_split(problem, max_search=1000)
-        cities = solution_to_cities(final_solution)
+        cities = solution_to_cities(final_solution, problem)
         is_valid, message = verify_delta_solution(cities, problem, tolerance=1e-3)
         if not is_valid:
             print(f"FINAL CHECK FAILED: {message}")

@@ -104,7 +104,7 @@ def generate_baseline(problem, path_matrix=None, use_precompute=False):
 
 def generate_topology_savings(problem, check_neighbors=False, sample_ratio=1, path_matrix=None, use_precompute=False):
     """
-    Heuristic 3: 'Path Interception' (Optimized)
+    Heuristic 2: 'Path Interception' (Optimized)
     
     Optimizations:
     1. Inverted Indexing: We look up path nodes in a dict (O(1)) instead of looping trips.
@@ -209,68 +209,11 @@ def generate_topology_savings(problem, check_neighbors=False, sample_ratio=1, pa
 
     return Solution(trips)
 
-def generate_geometric_clusters(problem):
-    """Heuristic 3: K-Means or Angular Sweep"""
-    pass
-
-def generate_split_visits(problem):
-    """Heuristic 4: Visit every city twice (50% gold each)"""
-    trips = []
-    for city in range(1, problem.num_cities):
-        half_gold = problem.graph.nodes[city]['gold'] / 2
-
-        if half_gold == 0:
-            continue
-
-        trip_one = Trip([(city, half_gold)], problem=problem)
-        trip_two = copy(trip_one)
-
-        trips.append(trip_one)
-        trips.append(trip_two)
-
-    return Solution(trips)
-
-def generate_random_chunk_visits(problem, max_split=4):
-    """
-    Heuristic 5: Random Chunk Visits
-
-    For each city, randomly decide to split the collection into 'k' separate trips.
-    k is chosen randomly between 1 (no split) and max_split.
-    """
-    
-    # Splitting is only beneficial if Beta > 1. Otherwise just return the standard baseline (1 trip per city)
-    if problem.beta <= 1:
-        return generate_baseline(problem)
-
-    trips = []
-    
-    for city in range(1, problem.num_cities):
-        total_gold = problem.graph.nodes[city]['gold']
-        if total_gold == 0: continue
-        
-        # Randomly decide how many chunks to split this city into
-        num_visits = random.randint(1, max_split)
-        
-        gold_per_visit = total_gold / num_visits
-        
-        # We calculate the path ONCE.
-        template_trip = Trip(
-            cities=[(city, gold_per_visit)], 
-            problem=problem
-        )
-        
-        # 4. Clone the template 'num_visits' times
-        for _ in range(num_visits):
-            # We must Deep Copy to ensure they are independent objects
-            # (e.g., if a mutation later changes one trip, it shouldn't change the others)
-            trips.append(deepcopy(template_trip))
-            
-    return Solution(trips)
 
 def generate_adaptive_split(problem, max_search=50, path_matrix=None, use_precompute=False):
     """
-    Heuristic 6: Adaptive Optimal Split (Binary Search Optimized)
-    FIXED: Prevents pairing 'k' visits with 'k-1' gold payloads.
+    Heuristic 3: Adaptive Optimal Split (Binary Search Optimized)
+    This function finds which one id the best number of trips (K) to split each city into, using binary search.
     """
     
     if problem.beta <= 1:
@@ -282,7 +225,7 @@ def generate_adaptive_split(problem, max_search=50, path_matrix=None, use_precom
         total_gold = problem.graph.nodes[city]['gold']
         if total_gold == 0: continue
         
-        # --- Helper: calculate cost for K trips ---
+        # Helper to calculate the cost for K trips
         def get_total_strategy_cost(k):
             gold_per_visit = total_gold / k
             temp_trip = Trip(
@@ -293,7 +236,7 @@ def generate_adaptive_split(problem, max_search=50, path_matrix=None, use_precom
             )
             return temp_trip.total_cost * k, temp_trip
 
-        # --- BINARY SEARCH ---
+        # Binary Search for Optimal K
         low = 1
         high = max_search
         
@@ -318,8 +261,7 @@ def generate_adaptive_split(problem, max_search=50, path_matrix=None, use_precom
             if cost_next < min_cost: 
                  min_cost = cost_next
                  best_k = mid + 1
-                 # --- THE FIX IS HERE ---
-                 best_trip_obj = trip_next # <--- We must save the matching trip!
+                 best_trip_obj = trip_next
             
             # Binary Search Direction
             if cost_mid < cost_next:
@@ -343,7 +285,7 @@ def generate_adaptive_split(problem, max_search=50, path_matrix=None, use_precom
                 winner_k = best_k
 
         # Apply the winner configuration
-        # IMPORTANT: winner_trip was created with gold = total/winner_k
+        # winner_trip was created with gold = total/winner_k
         # So repeating it winner_k times yields exactly total gold.
         best_trip = winner_trip.change_times_taken(winner_k)
         best_trips.append(best_trip)

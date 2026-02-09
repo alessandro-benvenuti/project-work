@@ -134,7 +134,7 @@ class Trip:
         Heuristic: The cost function applied to the Euclidean distance.
         """
         
-        # 1. Define the Heuristic Function (Local helper or separate method)
+        # 1. Define the Heuristic Function
         def heuristic(u, v):
             # Get positions
             pos_u = np.array(graph.nodes[u]['pos'])
@@ -170,8 +170,6 @@ class Trip:
                 break
 
             # If the popped f_score is worse than what we already found, skip (lazy deletion)
-            # Note: We can't strictly rely on this optimization with non-monotonic heuristics,
-            # but ours is monotonic, so it's safe.
             if current_f > g_score.get(u, float('inf')) + heuristic(u, target):
                 continue
 
@@ -183,7 +181,7 @@ class Trip:
                 tentative_g = g_score[u] + step_cost
 
                 if tentative_g < g_score.get(v, float('inf')):
-                    # We found a better path to v!
+                    # We found a better path to v
                     prev[v] = u
                     g_score[v] = tentative_g
                     
@@ -192,7 +190,7 @@ class Trip:
                     heapq.heappush(pq, (f_score, v))
 
         if target not in g_score:
-             # Fallback or error if graph is disconnected
+            # Fallback or error if graph is disconnected
             raise nx.NetworkXNoPath(f"No path from {source} to {target}")
 
         # Reconstruct path
@@ -214,7 +212,6 @@ class Trip:
         
         # Use Dijkstra if requested, otherwise A*
         if use_dijkstra:
-            # You already have dijkstra_with_gold in your class
             p = self.dijkstra_with_gold(problem.graph, 0, first_city, 0.0, problem)
         else:
             p = self.astar_with_gold(problem.graph, 0, first_city, 0.0, problem)
@@ -259,22 +256,15 @@ class Trip:
             cost += dist + (problem.alpha * dist * w) ** problem.beta
             
         return cost
+    
 
-        # cost = 0
-        # total_gold = 0
-        # for i, x in enumerate(self.path):
-        #     dist = problem.graph[self.path[i - 1][0]][x[0]]['dist'] if i > 0 else 0
-        #     cost += dist + (problem.alpha * dist * total_gold) ** problem.beta
-        #     total_gold = x[1]
-        # return cost
+
     
 class Solution:
     def __init__(self, trips: list[Trip]):
         self.trips = trips
         self.total_cost = sum([trip.total_cost for trip in trips])
         self.total_gold = sum([trip.total_gold for trip in trips])
-
-    
 
     def combine_trips(trip1: Trip, trip2: Trip, problem: Problem) -> Trip:
         combined_cities = trip1.cities + trip2.cities

@@ -99,21 +99,17 @@ Problem.graph = property(fast_graph_accessor)
 # --- MONKEY PATCH END ---
     
 def solution(problem: Problem) -> Solution:
-    return solve(problem)
+    return solve(problem)[0]
     
 
 
 
 def main():
-    num_cities_list = [10, 50, 100, 200, 1000]
+    num_cities_list = [50, 100, 200, 1000]
+    num_cities_list = [1000]
     densities = [0.1, 0.2, 0.5, 1.0]
     alphas = [0.1, 1, 2, 5]
     betas = [0.1, 1, 2, 5]
-
-    num_cities_list = [10]
-    densities = [0.1]
-    alphas = [1]
-    betas = [2]
 
     # Output file setup
     os.makedirs("logs", exist_ok=True)

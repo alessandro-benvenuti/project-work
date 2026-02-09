@@ -5,7 +5,6 @@ import os
 import numpy as np
 import random
 
-from gold_collector.utils import generate_baseline, generate_topology_savings, generate_split_visits, generate_random_chunk_visits, generate_adaptive_split, compute_distance_matrix
 from gold_collector.core import Solution, Trip
 
 class Individual:
@@ -168,24 +167,21 @@ class Individual:
                     t = random.choice(candidates)
                     
                     # 1. Calculate the TOTAL gold this stack is currently responsible for
-                    # (e.g. 10 trips * 5.0 gold = 50.0 total)
                     current_stack_gold = sum(amount for _, amount in t.cities) * t.times_taken
                     
                     if current_stack_gold <= 0: continue
 
-                    # 2. Determine new number of repeats
-                    # We try to nudge it slightly (exploration)
+                    # 2. Determine new number of repeats and try to nudge it slightly
                     change = random.choice([-1, 1, -2, 2, -5, 5])
                     new_times = max(1, t.times_taken + change)
                     
                     if new_times == t.times_taken: continue
 
-                    # 3. CONSERVATION OF GOLD
+                    # 3. We keep the total gold responsibility the same, so we adjust the per-visit amount accordingly
                     new_cities = []
                     for city_id, old_amount in t.cities:
                         total_stack_gold = old_amount * t.times_taken
                         
-                        # --- CLAMP TO REALITY ---
                         # Ensure we don't accidentally create gold due to float drift
                         max_available = problem.graph.nodes[city_id]['gold']
                         if total_stack_gold > max_available:
@@ -195,7 +191,7 @@ class Individual:
                         new_amount = total_stack_gold / new_times
                         new_cities.append((city_id, new_amount))
                     
-                    # 4. Create new Trip (as discussed before)
+                    # 4. Create new Trip
                     new_trip = Trip(
                         cities=new_cities, 
                         problem=problem, 
@@ -203,11 +199,6 @@ class Individual:
                         use_precompute=use_precompute,
                         times_taken=new_times 
                     )
-                    
-                    # The new_trip.__init__ automatically:
-                    # 1. Rebuilds the path (putting new_amount into the (node, gold) tuples)
-                    # 2. Calculates the correct cost based on that path
-                    # 3. Multiplies by times_taken
                     
                     self.cost = self.cost - t.total_cost + new_trip.total_cost
                     self.trips.remove(t)
@@ -219,7 +210,7 @@ class Individual:
         child_trips = []
         collected_gold = {c: 0.0 for c in range(problem.num_cities)}
         
-        # --- STEP 1: Inherit from Parent A ---
+        # 1. Inherit from Parent A
         num_to_take = max(1, len(self.trips) // 2)
         trips_from_A = random.sample(self.trips, num_to_take)
         
@@ -229,7 +220,7 @@ class Individual:
             for city_id, amount in new_t.cities:
                 collected_gold[city_id] += amount * new_t.times_taken
 
-        # --- STEP 2: Inherit from Parent B ---
+        # 2. Inherit from Parent B
         for t in other_parent.trips:
             # Check if this trip is useful
             limit_factor = float('inf') 
@@ -244,7 +235,6 @@ class Individual:
                 if remaining > 1e-6:
                     useful = True
                     # How many full repeats fit?
-                    # Use round to avoid 2.99999 becoming 2
                     max_reps = int(remaining / amount_per_visit + 1e-9)
                     if max_reps < limit_factor:
                         limit_factor = max_reps
@@ -260,13 +250,12 @@ class Individual:
                 for city_id, amount in new_t.cities:
                     collected_gold[city_id] += amount * new_t.times_taken
 
-        # --- STEP 3: REPAIR (The Sweeper) ---
+        # 3. Repair the child by adding "sweeper trips" for any missing gold
         missing_cities = []
         for c in range(1, problem.num_cities):
             total = problem.graph.nodes[c]['gold']
             current = collected_gold.get(c, 0.0)
             
-            # CRITICAL FIX: The threshold must be tiny (1e-5), NOT 1.0
             if total - current > 1e-5:
                 # We append the exact missing amount
                 missing_cities.append((c, total - current))
@@ -315,10 +304,10 @@ class Island:
             
 
     def process_generation(self, mutation_rate=0.2):
-        # Select parents, mutate, replace weak...
+
         offspring = []
 
-        # initialize population if empty (should only happen at the very beginning)
+        # Initialize population if empty (should only happen at the very beginning)
         if len(self.population) < self.pop_size:
             seed = self.population[0]
 
@@ -332,6 +321,7 @@ class Island:
                 self.population.append(mutated_sol)
                 self.history.add(mutated_sol.cost)
 
+        # Generate offspring through mutation and crossover
         for _ in range(self.offspring_size):
             if random.random() < mutation_rate:
                 # Mutation step
