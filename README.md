@@ -4,6 +4,49 @@
 
 **A high-performance solver for a constraint-based Vehicle Routing Problem with dynamic weight penalties.**
 
+- [project-work](#project-work)
+- [Gold Collection Optimization: A Parallel Evolutionary Approach](#gold-collection-optimization-a-parallel-evolutionary-approach)
+  - [1. Project Overview](#1-project-overview)
+    - [Key Features](#key-features)
+  - [2. Problem Formulation](#2-problem-formulation)
+    - [2.1 The Graph Environment](#21-the-graph-environment)
+    - [2.2 The Objective](#22-the-objective)
+    - [2.3 The Physics (Cost Function)](#23-the-physics-cost-function)
+    - [2.4 The Optimization Challenge](#24-the-optimization-challenge)
+  - [3. Solution Architecture](#3-solution-architecture)
+    - [3.1 Strategy Selection](#31-strategy-selection)
+    - [3.2 Constructive Heuristics (Initialization)](#32-constructive-heuristics-initialization)
+    - [3.3 The Island Model (Parallel GA)](#33-the-island-model-parallel-ga)
+    - [3.4 Genetic Operators](#34-genetic-operators)
+      - [The Genotype](#the-genotype)
+      - [Mutation Strategies](#mutation-strategies)
+      - [Crossover Strategy (Greedy Inheritance)](#crossover-strategy-greedy-inheritance)
+    - [3.5 Algorithmic Decisions \& Tuning](#35-algorithmic-decisions--tuning)
+  - [4. Technical Optimizations](#4-technical-optimizations)
+    - [4.1 Monkey Patching for Speed](#41-monkey-patching-for-speed)
+    - [4.2 Precomputed Weighted Paths (Fixed Geometry)](#42-precomputed-weighted-paths-fixed-geometry)
+    - [4.3 Parallel Execution](#43-parallel-execution)
+  - [5. Experimental Results](#5-experimental-results)
+    - [5.1 Summary Metrics](#51-summary-metrics)
+      - [Impact of Problem Size ($N$)](#impact-of-problem-size-n)
+      - [Impact of Graph Density](#impact-of-graph-density)
+      - [Impact of Cost Multiplier ($\\alpha$)](#impact-of-cost-multiplier-alpha)
+      - [Impact of Cost Exponent ($\\beta$)](#impact-of-cost-exponent-beta)
+    - [5.2 Analysis of Results](#52-analysis-of-results)
+  - [6. Project Structure](#6-project-structure)
+    - [Key Modules](#key-modules)
+  - [7. Installation \& Usage](#7-installation--usage)
+    - [Prerequisites](#prerequisites)
+    - [Installation](#installation)
+    - [Running the Solver](#running-the-solver)
+  - [8. Acknowledgments](#8-acknowledgments)
+  - [9 Teacher's Notes](#9-teachers-notes)
+    - [Repository Setup](#repository-setup)
+    - [Main File Requirements (s\<student\_id\>.py)](#main-file-requirements-sstudent_idpy)
+    - [Rules](#rules)
+    - [Notes](#notes)
+
+
 ## 1. Project Overview
 
 This project implements a **Parallel Genetic Algorithm (Island Model)** to solve a complex variation of the Traveling Salesperson Problem (TSP). In this scenario, an agent must collect gold from distributed cities in a connected graph and return it to a home base.
@@ -294,42 +337,15 @@ def precompute_weighted_paths(problem, ref_gold_ratio=0.5):
 
 The solution leverages Python's `ProcessPoolExecutor` to run the **Island Model** in parallel. Each "Island" evolves on a separate CPU core, and migration is handled by the main process during synchronization points. This maximizes hardware utilization and allows for a larger total population size.
 
-
 ---
 
-## 5. Project Structure
-
-The project is organized into a modular package structure to separate core logic, heuristics, and the evolutionary engine.
-
-```plaintext
-.
-├── logs/                   # Directory for runtime logs and results CSVs
-├── src/                    # Main source code (formerly gold_collector)
-│   ├── core.py             # Core data structures: Solution, Trip, and Path calculations
-│   ├── genetic.py          # Evolutionary logic: Individual, Population, Mutation, Crossover
-│   ├── solve.py            # Main solver orchestration: Archipelago, Migration, Parallel Execution
-│   └── utils.py            # Constructive Heuristics: Adaptive Split, Topology Savings, Precomputation
-├── s343748.py              # Entry point script (Main Execution & Monkey Patching)
-└── README.md               # Project documentation
-
-```
-
-### Key Modules
-
-* **`src/core.py`**: Defines the `Trip` and `Solution` classes. It handles the low-level cost calculations and exact path verification using Dijkstra/A*.
-* **`src/genetic.py`**: Contains the `Island` class and the genetic operators (`mutate`, `crossover`). This file defines how solutions evolve over generations.
-* **`src/utils.py`**: A collection of high-performance heuristics used to seed the population and optimize geometry. Includes the `generate_adaptive_split` and `precompute_weighted_paths` functions.
-* **`src/solve.py`**: The "Brain" of the operation. It decides which strategy to run (Heuristic vs. Genetic) based on problem parameters ($\beta$) and manages the parallel `ProcessPoolExecutor`.
-
----
-
-## 7. Experimental Results
+## 5. Experimental Results
 
 We evaluated the solver on **256 different problem configurations**, varying the number of cities ($N$), graph density, and cost function parameters ($\alpha, \beta$).
 
 The full raw data can be found here: [📄 logs/results.csv](logs/results.csv)
 
-### 6.1 Summary Metrics
+### 5.1 Summary Metrics
 
 #### Impact of Problem Size ($N$)
 As the number of cities increases, the problem complexity grows exponentially. The Parallel Genetic Algorithm maintains solution quality even for large instances ($N = 1000$), though computation time increases naturally (while always being on average under 10 minutes).
@@ -369,7 +385,7 @@ This is the most critical parameter. It dictates whether the problem deals with 
 | 5.00 | 100.00 | 98.93 |
 
 
-### 6.2 Analysis of Results
+### 5.2 Analysis of Results
 
 - **1. Consistent Performance at Scale**
     The data demonstrates that the solver is highly scalable. Independent of the problem size (), graph density, or the linear weight factor , the algorithm consistently finds solutions that are **54% to 58% better** than the baseline. This proves that the core logic—optimizing path geometry via the Island Model—is effective across a wide range of graph structures.
@@ -380,6 +396,32 @@ This is the most critical parameter. It dictates whether the problem deals with 
     1. <strong> $\beta<1$ Distance Dominates</strong>: The cost function is sub-linear regarding weight. The problem behaves similarly to a standard Traveling Salesperson Problem (TSP). The baseline strategy (returning to base after every city) maximizes travel distance and is therefore extremely inefficient. Our Genetic Algorithm exploits this by linking many cities into single tours, achieving significant savings (~27%).
     2.  <strong> $\beta \approx 1$ The Tipping Point</strong>: At , the cost of carrying weight scales linearly with distance. In this specific regime, the baseline strategy of "emptying the truck" after every city is actually a very strong local optimum, as it minimizes the weight-distance product. Our solver matches this performance (0.22% improvement), indicating that the baseline is near-optimal for this specific physics configuration.
     3.  <strong> $\beta>1$ Weight Dominates</strong>: The penalty for carrying weight becomes exponential. The baseline strategy fails catastrophically here because it forces the agent to carry a *full* city's gold load at once. Our **Adaptive Split** heuristic dominates in this regime by identifying that it is cheaper to visit a city multiple times (carrying small fractions of gold) than to visit it once. This strategy yields massive cost reductions, approaching **99-100% improvement** over the naive approach.
+
+---
+
+## 6. Project Structure
+
+The project is organized into a modular package structure to separate core logic, heuristics, and the evolutionary engine.
+
+```plaintext
+.
+├── logs/                   # Directory for runtime logs and results CSVs
+├── src/                    # Main source code (formerly gold_collector)
+│   ├── core.py             # Core data structures: Solution, Trip, and Path calculations
+│   ├── genetic.py          # Evolutionary logic: Individual, Population, Mutation, Crossover
+│   ├── solve.py            # Main solver orchestration: Archipelago, Migration, Parallel Execution
+│   └── utils.py            # Constructive Heuristics: Adaptive Split, Topology Savings, Precomputation
+├── s343748.py              # Entry point script (Main Execution & Monkey Patching)
+└── README.md               # Project documentation
+
+```
+
+### Key Modules
+
+* **`src/core.py`**: Defines the `Trip` and `Solution` classes. It handles the low-level cost calculations and exact path verification using Dijkstra/A*.
+* **`src/genetic.py`**: Contains the `Island` class and the genetic operators (`mutate`, `crossover`). This file defines how solutions evolve over generations.
+* **`src/utils.py`**: A collection of high-performance heuristics used to seed the population and optimize geometry. Includes the `generate_adaptive_split` and `precompute_weighted_paths` functions.
+* **`src/solve.py`**: The "Brain" of the operation. It decides which strategy to run (Heuristic vs. Genetic) based on problem parameters ($\beta$) and manages the parallel `ProcessPoolExecutor`.
 
 
 ---
@@ -450,7 +492,7 @@ This project was developed individually, with the following notes on collaborati
 
 
 
-
+## 9 Teacher's Notes
 
 ### Repository Setup
 

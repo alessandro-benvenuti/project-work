@@ -5,7 +5,7 @@ import os
 import numpy as np
 import random
 
-from gold_collector.core import Solution, Trip
+from src.core import Solution, Trip
 
 class Individual:
     def __init__(self, trips, cost):

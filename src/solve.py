@@ -9,9 +9,9 @@ import math
 import random
 import os
 
-from gold_collector.core import Solution, Trip
-from gold_collector.utils import generate_baseline, generate_topology_savings, generate_adaptive_split, compute_distance_matrix, precompute_weighted_paths
-from gold_collector.genetic import Island, run_island_evolution
+from src.core import Solution, Trip
+from src.utils import generate_baseline, generate_topology_savings, generate_adaptive_split, compute_distance_matrix, precompute_weighted_paths
+from src.genetic import Island, run_island_evolution
 
 class Archipelago:
     def __init__(self, problem, num_islands=4, population_size=50, offspring_size=20):
@@ -139,18 +139,22 @@ class Archipelago:
 
 def solution_to_cities(solution: Solution, problem: Problem):
     """
-    Converts a Solution object (with Trips and Paths) into the required output format:
-    List of (node_id, gold_picked_up_here) in the order they are visited.
-    Clamps values to ensure validity.
+    Converts a Solution object into a List of Tuples: [(node_id, gold_collected), ...]
+    1. Calculates Deltas (incremental gold).
+    2. Clamps values to physics (0 <= collected <= available).
+    3. Removes the starting (0,0).
+    4. Removes consecutive (0,0) duplicates.
+    5. Returns a list of IMMUTABLE TUPLES.
     """
-    # Extract the full path from the solution
+    # 1. Extract path as mutable LISTS first (so we can update gold values)
     cities = []
     for trip in solution.trips:
+        # We assume trip.path is stored as tuples, so we convert to list to allow editing
         path_as_lists = [list(step) for step in trip.path]
         for _ in range(trip.times_taken):
             cities.extend(deepcopy(path_as_lists))
 
-    # Calculate Deltas and Clamp
+    # 2. Calculate Deltas and Clamp (In-Place modification of lists)
     collected_so_far = {c: 0.0 for c in range(problem.num_cities)}
     previous = 0.0
     
@@ -166,7 +170,6 @@ def solution_to_cities(solution: Solution, problem: Problem):
                 current_owned = collected_so_far[node_id]
                 allowed = max_val - current_owned
                 
-                # If we try to take more than available, clamp it
                 if delta > allowed:
                     delta = max(0.0, allowed)
                 
@@ -174,15 +177,39 @@ def solution_to_cities(solution: Solution, problem: Problem):
             else:
                 delta = 0.0
             
-            # Update the list in-place
             city[1] = delta
             previous = raw_cumulative
         else:
             previous = 0.0
             city[1] = 0.0
 
-    return cities
+    # 3. FILTERING & CONVERSION TO TUPLES
+    final_cities = []
+    
+    # A. Remove the very first node if it is (0,0)
+    if cities and cities[0][0] == 0 and cities[0][1] == 0:
+        cities.pop(0)
 
+    if cities:
+        # Add the first element as a TUPLE
+        final_cities.append(tuple(cities[0]))
+        
+        # Loop through the rest to filter duplicates
+        for i in range(1, len(cities)):
+            current_node = cities[i]
+            prev_node = cities[i-1]
+            
+            # Check for consecutive base visits
+            is_zero = (current_node[0] == 0 and current_node[1] == 0)
+            was_zero = (prev_node[0] == 0 and prev_node[1] == 0)
+            
+            if is_zero and was_zero:
+                continue # Skip duplicate
+            
+            # B. CONVERT TO TUPLE HERE
+            final_cities.append(tuple(current_node))
+
+    return final_cities
 
 def verify_delta_solution(cities_list, problem, tolerance=1e-3):
     """
@@ -196,10 +223,7 @@ def verify_delta_solution(cities_list, problem, tolerance=1e-3):
     3. Physics: Are we picking up negative gold? (Impossible)
     """
     
-    # 1. Connectivity Check
-    if not cities_list or cities_list[0][0] != 0:
-        return False, "Path must start at base (0)."
-
+    # 1. Connectivity Check and Physics Check (while accumulating gold)
     collected_gold = {c: 0.0 for c in range(problem.num_cities)}
 
     for i in range(len(cities_list)):

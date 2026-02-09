@@ -3,7 +3,7 @@ import numpy as np
 import networkx as nx
 from copy import copy, deepcopy
 
-from gold_collector.core import Solution, Trip
+from src.core import Solution, Trip
 
 def precompute_weighted_paths(problem, ref_gold_ratio=0.5):
     """

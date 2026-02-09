@@ -1,2 +1,0 @@
-10,0.1,1,2,ERROR,ERROR,0,0,"not enough values to unpack (expected 4, got 2)"
-10,0.1,1,2,ERROR,ERROR,0,0,'str' object has no attribute 'trips'

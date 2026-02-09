@@ -12,8 +12,8 @@ import csv
 import time
 import itertools
 
-from gold_collector.core import Trip, Solution
-from gold_collector.solve import solve
+from src.core import Trip, Solution
+from src.solve import solve
 
 class Problem:
     _graph: nx.Graph
