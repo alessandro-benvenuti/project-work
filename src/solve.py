@@ -288,14 +288,18 @@ def solve(problem: Problem) -> Solution:
     '''
 
 
-    if problem.beta <= 2.0:
+    if problem.beta <= 1.5:
         print("Running Parallel Genetic Algorithm with Migration...")
         if problem.num_cities > 50:
             archipelago = Archipelago(problem)
         else:
             # For smaller problems we use just 3 islands, since the last 2 would otherwise be too similar
             archipelago = Archipelago(problem, num_islands=3)
-        solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
+        
+        if problem.num_cities > 500:
+            solution = archipelago.run_parallel(total_generations=150, migration_interval=20)
+        else:
+            solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
     else:
         # If beta is very high, the cost is dominated by the gold term, so we can use a more aggressive heuristic that focuses on gold collection without worrying too much about distance. 
         # The Adaptive Split heuristic is designed for this kind of scenario, as it optimizes the number of visits to each city based on the gold available and the cost function's sensitivity to gold.
