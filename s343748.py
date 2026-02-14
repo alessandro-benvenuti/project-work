@@ -33,3 +33,9 @@ Problem.num_cities = property(get_num_cities)
 def solution(problem: Problem) -> Solution:
     return solve(problem)[0]
     
+
+def is_valid(path, p:Problem):
+    for (c1, _), (c2, _) in zip(path, path[1:]):
+        if not nx.has_path(p.graph, c1, c2):
+             return False # Esce solo se trova un errore
+    return True # Restituisce True solo alla fine del ciclo

@@ -288,7 +288,8 @@ def solve(problem: Problem) -> Solution:
     '''
 
 
-    if problem.beta <= 1.5:
+    # if problem.beta <= 1.5 or (problem.num_cities > 1000 and problem.beta > 1):
+    if problem.num_cities < 1000 and problem.beta <= 1.5:
         print("Running Parallel Genetic Algorithm with Migration...")
         if problem.num_cities > 50:
             archipelago = Archipelago(problem)
@@ -296,21 +297,36 @@ def solve(problem: Problem) -> Solution:
             # For smaller problems we use just 3 islands, since the last 2 would otherwise be too similar
             archipelago = Archipelago(problem, num_islands=3)
         
-        if problem.num_cities > 500:
-            solution = archipelago.run_parallel(total_generations=150, migration_interval=20)
+        if problem.num_cities > 1000:
+            path_matrix = precompute_weighted_paths(problem, ref_gold_ratio=0.5)
+            solution = generate_topology_savings(problem, path_matrix=path_matrix, use_precompute=True)
+        
         else:
+            # run the genetic algorithm
             solution = archipelago.run_parallel(total_generations=200, migration_interval=20)
     else:
-        # If beta is very high, the cost is dominated by the gold term, so we can use a more aggressive heuristic that focuses on gold collection without worrying too much about distance. 
-        # The Adaptive Split heuristic is designed for this kind of scenario, as it optimizes the number of visits to each city based on the gold available and the cost function's sensitivity to gold.
-        # In general it makes no sense to run the genetic algorithm
-        print("Running Heuristic Adaptive Split (No Parallelism)...")
-        final_solution = generate_adaptive_split(problem, max_search=1000)
-        cities = solution_to_cities(final_solution, problem)
-        is_valid, message = verify_delta_solution(cities, problem, tolerance=1e-3)
-        if not is_valid:
-            print(f"FINAL CHECK FAILED: {message}")
-        return cities, final_solution.total_cost, is_valid, message
+        if problem.beta > 1:
+            # If beta is very high, the cost is dominated by the gold term, so we can use a more aggressive heuristic that focuses on gold collection without worrying too much about distance. 
+            # The Adaptive Split heuristic is designed for this kind of scenario, as it optimizes the number of visits to each city based on the gold available and the cost function's sensitivity to gold.
+            # In general it makes no sense to run the genetic algorithm
+            print("Running Heuristic Adaptive Split (No Parallelism)...")
+            final_solution = generate_adaptive_split(problem, max_search=1000)
+            cities = solution_to_cities(final_solution, problem)
+            is_valid, message = verify_delta_solution(cities, problem, tolerance=1e-3)
+            if not is_valid:
+                print(f"FINAL CHECK FAILED: {message}")
+            return cities, final_solution.total_cost, is_valid, message
+        
+        else:
+            print("Running Heuristic Topology Savings (No Parallelism)...")
+            path_matrix = precompute_weighted_paths(problem, ref_gold_ratio=0.5)
+            final_solution = generate_topology_savings(problem, path_matrix=path_matrix, use_precompute=True)
+            cities = solution_to_cities(final_solution, problem)
+            is_valid, message = verify_delta_solution(cities, problem, tolerance=1e-3)
+            if not is_valid:
+                print(f"FINAL CHECK FAILED: {message}")
+            return cities, final_solution.total_cost, is_valid, message
+
     
     
     return solution
